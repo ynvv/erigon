@@ -677,7 +677,7 @@ func (hd *HeaderDownload) ProcessHeadersPOS(csHeaders []ChainSegmentHeader, tx k
 			}
 			hd.posAnchor = nil
 			hd.posStatus = Synced
-			hd.BeaconRequestList.Interrupt(engineapi.Synced)
+			hd.BeaconRequestList.Interrupt(engineapi.InterruptSynced)
 			// Wake up stage loop if it is outside any of the stages
 			select {
 			case hd.DeliveryNotify <- struct{}{}:
@@ -1290,7 +1290,7 @@ func (hd *HeaderDownload) StartPoSDownloader(
 				hd.lock.Lock()
 				hd.cleanUpPoSDownload()
 				hd.lock.Unlock()
-				hd.BeaconRequestList.Interrupt(engineapi.Stopping)
+				hd.BeaconRequestList.Interrupt(engineapi.InterruptStopping)
 				return
 			case <-logEvery.C:
 				if hd.PosStatus() == Syncing {

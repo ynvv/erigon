@@ -163,9 +163,7 @@ func HeadersPOS(
 	}
 
 	log.Info(fmt.Sprintf("[%s] Waiting for Beacon Chain...", s.LogPrefix()))
-
-	onlyNewRequests := cfg.hd.PosStatus() == headerdownload.Syncing
-	interrupt, requestId, requestWithStatus := cfg.hd.BeaconRequestList.WaitForRequest(onlyNewRequests, test)
+	interrupt, requestId, requestWithStatus := cfg.hd.BeaconRequestList.WaitForRequest(test)
 
 	cfg.hd.SetPOSSync(true)
 	cfg.hd.SetHeaderReader(&chainReader{config: &cfg.chainConfig, tx: tx, blockReader: cfg.blockReader})
@@ -202,7 +200,7 @@ func HeadersPOS(
 	}
 
 	if err != nil {
-		if requestStatus == engineapi.New {
+		if requestStatus == engineapi.StatusNew {
 			cfg.hd.PayloadStatusCh <- engineapi.PayloadStatus{CriticalError: err}
 		}
 		return err
@@ -214,7 +212,7 @@ func HeadersPOS(
 		}
 	}
 
-	if requestStatus == engineapi.New && payloadStatus != nil {
+	if requestStatus == engineapi.StatusNew && payloadStatus != nil {
 		if payloadStatus.Status == remote.EngineStatus_SYNCING || payloadStatus.Status == remote.EngineStatus_ACCEPTED || !useExternalTx {
 			cfg.hd.PayloadStatusCh <- *payloadStatus
 		} else {
@@ -355,7 +353,7 @@ func startHandlingForkChoice(
 
 	log.Info(fmt.Sprintf("[%s] Fork choice re-org", s.LogPrefix()), "headerNumber", headerNumber, "forkingPoint", forkingPoint)
 
-	if requestStatus == engineapi.New {
+	if requestStatus == engineapi.StatusNew {
 		if headerNumber-forkingPoint <= ShortPoSReorgThresholdBlocks {
 			// TODO(yperbasis): what if some bodies are missing and we have to download them?
 			cfg.hd.SetPendingPayloadHash(headerHash)
@@ -559,7 +557,7 @@ func verifyAndSaveNewPoSHeader(
 	}
 
 	// OK, we're on the canonical chain
-	if requestStatus == engineapi.New {
+	if requestStatus == engineapi.StatusNew {
 		cfg.hd.SetPendingPayloadHash(headerHash)
 	}
 
@@ -593,7 +591,7 @@ func schedulePoSDownload(
 	s *StageState,
 	cfg HeadersCfg,
 ) bool {
-	cfg.hd.BeaconRequestList.SetStatus(requestId, engineapi.DataWasMissing)
+	cfg.hd.BeaconRequestList.SetStatus(requestId, engineapi.StatusSyncing)
 
 	if cfg.hd.PosStatus() != headerdownload.Idle {
 		log.Debug(fmt.Sprintf("[%s] Postponing PoS download since another one is in progress", s.LogPrefix()), "height", heightToDownload, "hash", hashToDownload)
@@ -677,6 +675,7 @@ func verifyAndSaveDownloadedPoSHeaders(tx kv.RwTx, cfg HeadersCfg, headerInserte
 		cfg.hd.ReportBadHeaderPoS(cfg.hd.PoSDownloaderTip(), lastValidHash)
 	} else {
 		log.Info("PoS headers verified and saved", "requestId", cfg.hd.RequestId(), "fork head", lastValidHash)
+		cfg.hd.BeaconRequestList.SetStatus(cfg.hd.RequestId(), engineapi.StatusSynced)
 	}
 
 	cfg.hd.HeadersCollector().Close()
@@ -703,11 +702,11 @@ func forkingPoint(
 }
 
 func handleInterrupt(interrupt engineapi.Interrupt, cfg HeadersCfg, tx kv.RwTx, headerInserter *headerdownload.HeaderInserter, useExternalTx bool) (bool, error) {
-	if interrupt != engineapi.None {
-		if interrupt == engineapi.Stopping {
+	if interrupt != engineapi.InterruptNone {
+		if interrupt == engineapi.InterruptStopping {
 			cfg.hd.PayloadStatusCh <- engineapi.PayloadStatus{CriticalError: errors.New("server is stopping")}
 		}
-		if interrupt == engineapi.Synced && cfg.hd.HeadersCollector() != nil {
+		if interrupt == engineapi.InterruptSynced && cfg.hd.HeadersCollector() != nil {
 			verifyAndSaveDownloadedPoSHeaders(tx, cfg, headerInserter)
 		}
 		if !useExternalTx {

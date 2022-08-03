@@ -31,8 +31,9 @@ type ForkChoiceMessage struct {
 type RequestStatus int
 
 const ( // RequestStatus values
-	New = iota
-	DataWasMissing
+	StatusNew = iota
+	StatusSyncing
+	StatusSynced
 )
 
 type RequestWithStatus struct {
@@ -43,9 +44,9 @@ type RequestWithStatus struct {
 type Interrupt int
 
 const ( // Interrupt values
-	None = iota
-	Synced
-	Stopping
+	InterruptNone = iota
+	InterruptSynced
+	InterruptStopping
 )
 
 type RequestList struct {
@@ -72,7 +73,7 @@ func (rl *RequestList) AddPayloadRequest(message *types.Block) {
 
 	rl.requests.Put(rl.requestId, &RequestWithStatus{
 		Message: message,
-		Status:  New,
+		Status:  StatusNew,
 	})
 
 	rl.syncCond.Broadcast()
@@ -88,32 +89,33 @@ func (rl *RequestList) AddForkChoiceRequest(message *ForkChoiceMessage) {
 	rl.requests = rl.requests.Select(func(key interface{}, value interface{}) bool {
 		req := value.(*RequestWithStatus)
 		_, isForkChoice := req.Message.(*ForkChoiceMessage)
-		return req.Status == New || !isForkChoice
+		return req.Status == StatusNew || !isForkChoice
 	})
 	// TODO(yperbasis): potentially purge some non-syncing old fork choices?
 
 	rl.requests.Put(rl.requestId, &RequestWithStatus{
 		Message: message,
-		Status:  New,
+		Status:  StatusNew,
 	})
 
 	rl.syncCond.Broadcast()
 }
 
-func (rl *RequestList) firstRequest(onlyNew bool) (id int, request *RequestWithStatus) {
+func (rl *RequestList) firstRequest() (id int, request *RequestWithStatus) {
 	foundKey, foundValue := rl.requests.Min()
-	if onlyNew {
-		foundKey, foundValue = rl.requests.Find(func(key interface{}, value interface{}) bool {
-			return value.(*RequestWithStatus).Status == New
-		})
+	if foundKey == nil {
+		return 0, nil
 	}
-	if foundKey != nil {
-		return foundKey.(int), foundValue.(*RequestWithStatus)
+	id = foundKey.(int)
+	request = foundValue.(*RequestWithStatus)
+	if request.Status == StatusSyncing {
+		// wait for sync to finish
+		return 0, nil
 	}
-	return 0, nil
+	return
 }
 
-func (rl *RequestList) WaitForRequest(onlyNew bool, noWait bool) (interrupt Interrupt, id int, request *RequestWithStatus) {
+func (rl *RequestList) WaitForRequest(noWait bool) (interrupt Interrupt, id int, request *RequestWithStatus) {
 	rl.syncCond.L.Lock()
 	defer rl.syncCond.L.Unlock()
 
@@ -122,14 +124,14 @@ func (rl *RequestList) WaitForRequest(onlyNew bool, noWait bool) (interrupt Inte
 
 	for {
 		interrupt = rl.interrupt
-		if interrupt != None {
-			if interrupt != Stopping {
+		if interrupt != InterruptNone {
+			if interrupt != InterruptStopping {
 				// clear the interrupt
-				rl.interrupt = None
+				rl.interrupt = InterruptNone
 			}
 			return
 		}
-		id, request = rl.firstRequest(onlyNew)
+		id, request = rl.firstRequest()
 		if request != nil || noWait {
 			return
 		}
