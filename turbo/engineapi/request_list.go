@@ -102,17 +102,21 @@ func (rl *RequestList) AddForkChoiceRequest(message *ForkChoiceMessage) {
 }
 
 func (rl *RequestList) firstRequest() (id int, request *RequestWithStatus) {
-	foundKey, foundValue := rl.requests.Min()
-	if foundKey == nil {
-		return 0, nil
+	it := rl.requests.Iterator()
+	for it.Next() {
+		key, value := it.Key(), it.Value()
+		id = key.(int)
+		request = value.(*RequestWithStatus)
+		if request.Status != StatusSyncing {
+			return
+		}
+		_, isForkChoice := request.Message.(*ForkChoiceMessage)
+		if isForkChoice {
+			// wait for ForkChoice sync to finish
+			return 0, nil
+		}
 	}
-	id = foundKey.(int)
-	request = foundValue.(*RequestWithStatus)
-	if request.Status == StatusSyncing {
-		// wait for sync to finish
-		return 0, nil
-	}
-	return
+	return 0, nil
 }
 
 func (rl *RequestList) WaitForRequest(noWait bool) (interrupt Interrupt, id int, request *RequestWithStatus) {
