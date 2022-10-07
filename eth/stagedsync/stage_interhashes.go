@@ -109,6 +109,7 @@ func SpawnIntermediateHashesStage(s *StageState, u Unwinder, tx kv.RwTx, cfg Tri
 
 	if cfg.checkRoot && root != expectedRootHash {
 		log.Error(fmt.Sprintf("[%s] Wrong trie root of block %d: %x, expected (from header): %x. Block hash: %x", logPrefix, to, root, expectedRootHash, headerHash))
+		panic("Wrong trie root of block")
 		if cfg.badBlockHalt {
 			return trie.EmptyRoot, fmt.Errorf("wrong trie root")
 		}
