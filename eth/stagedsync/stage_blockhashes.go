@@ -37,6 +37,8 @@ func StageBlockHashesCfg(db kv.RwDB, tmpDir string, cc *params.ChainConfig) Bloc
 }
 
 func SpawnBlockHashStage(s *StageState, tx kv.RwTx, cfg BlockHashesCfg, ctx context.Context) (err error) {
+	return nil
+	
 	useExternalTx := tx != nil
 	if !useExternalTx {
 		tx, err = cfg.db.BeginRw(ctx)

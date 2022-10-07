@@ -52,6 +52,8 @@ func BodiesForward(
 	test bool, // Set to true in tests, allows the stage to fail rather than wait indefinitely
 	firstCycle bool,
 ) error {
+	return nil
+	
 	var doUpdate bool
 	if cfg.snapshots != nil && s.BlockNumber < cfg.snapshots.BlocksAvailable() {
 		s.BlockNumber = cfg.snapshots.BlocksAvailable()
