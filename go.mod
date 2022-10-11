@@ -4,8 +4,8 @@ go 1.18
 
 require (
 	github.com/gballet/go-verkle v0.0.0-20220923150140-6c08cd337774
-	github.com/ledgerwatch/erigon-lib v0.0.0-20221006052028-22049904649b
-	github.com/ledgerwatch/erigon-snapshot v1.0.1-0.20220913092204-de54ee30c7b9
+	github.com/ledgerwatch/erigon-lib v0.0.0-20221011062425-d0efd3c1ca5e
+	github.com/ledgerwatch/erigon-snapshot v1.0.1-0.20221010023441-7e1da3031ab0
 	github.com/ledgerwatch/log/v3 v3.4.2
 	github.com/ledgerwatch/secp256k1 v1.0.0
 	github.com/ledgerwatch/trackerslist v1.0.0
@@ -64,7 +64,7 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.8.0
 	github.com/tendermint/go-amino v0.14.1
-	github.com/tendermint/tendermint v0.31.11
+	github.com/tendermint/tendermint v0.31.12
 	github.com/torquem-ch/mdbx-go v0.26.0
 	github.com/ugorji/go/codec v1.1.13
 	github.com/ugorji/go/codec/codecgen v1.1.13
@@ -72,6 +72,7 @@ require (
 	github.com/valyala/fastjson v1.6.3
 	github.com/xsleonard/go-merkle v1.1.0
 	go.uber.org/atomic v1.10.0
+	go.uber.org/zap v1.23.0
 	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d
 	golang.org/x/exp v0.0.0-20220921164117-439092de6870
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
@@ -110,6 +111,7 @@ require (
 	github.com/klauspost/compress v1.15.10 // indirect
 	github.com/klauspost/cpuid/v2 v2.1.1 // indirect
 	github.com/koron/go-ssdp v0.0.3 // indirect
+	github.com/ledgerwatch/interfaces v0.0.0-20220914022748-0bc2888c95ce // indirect
 	github.com/libp2p/go-buffer-pool v0.1.0 // indirect
 	github.com/libp2p/go-cidranger v1.1.0 // indirect
 	github.com/libp2p/go-flow-metrics v0.1.0 // indirect
@@ -155,7 +157,6 @@ require (
 	go.opentelemetry.io/otel v1.8.0 // indirect
 	go.opentelemetry.io/otel/trace v1.8.0 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
-	go.uber.org/zap v1.23.0 // indirect
 	lukechampine.com/blake3 v1.1.7 // indirect
 )
 
@@ -239,7 +240,7 @@ require (
 	golang.org/x/tools v0.1.12 // indirect
 	google.golang.org/genproto v0.0.0-20211118181313-81c1377c94b1 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
-	gopkg.in/yaml.v3 v3.0.1
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.3.0 // indirect
 	lukechampine.com/uint128 v1.1.1 // indirect
 	modernc.org/cc/v3 v3.38.1 // indirect
@@ -250,4 +251,8 @@ require (
 	modernc.org/opt v0.1.3 // indirect
 	modernc.org/strutil v1.1.3 // indirect
 	modernc.org/token v1.0.1 // indirect
+)
+
+replace (
+	github.com/tendermint/tendermint => github.com/bnb-chain/tendermint v0.31.12
 )

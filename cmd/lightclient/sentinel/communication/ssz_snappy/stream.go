@@ -1,18 +1,26 @@
+/*
+   Copyright 2022 Erigon-Lightclient contributors
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+       http://www.apache.org/licenses/LICENSE-2.0
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package ssz_snappy
 
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
-	"reflect"
-	"sync"
 
 	ssz "github.com/ferranbt/fastssz"
 	"github.com/golang/snappy"
-	"github.com/ledgerwatch/erigon/cmd/lightclient/clparams"
-	"github.com/ledgerwatch/erigon/cmd/lightclient/rpc/lightrpc"
 	"github.com/ledgerwatch/erigon/cmd/lightclient/sentinel/communication"
 	"github.com/libp2p/go-libp2p/core/network"
 )
@@ -20,8 +28,6 @@ import (
 type StreamCodec struct {
 	s  network.Stream
 	sr *snappy.Reader
-
-	mu sync.Mutex
 }
 
 func NewStreamCodec(
@@ -56,27 +62,15 @@ func (d *StreamCodec) CloseReader() error {
 
 // write packet to stream. will add correct header + compression
 // will error if packet does not implement ssz.Marshaler interface
-func (d *StreamCodec) WritePacket(pkt communication.Packet) (n int, err error) {
-	// if its a metadata request we dont write anything
-	if reflect.TypeOf(pkt) == reflect.TypeOf(&lightrpc.MetadataV1{}) || reflect.TypeOf(pkt) == reflect.TypeOf(&lightrpc.MetadataV2{}) {
-		return 0, nil
+func (d *StreamCodec) WritePacket(pkt communication.Packet, prefix ...byte) (err error) {
+	val, ok := pkt.(ssz.Marshaler)
+	if !ok {
+		return nil
 	}
-
-	p, sw, err := encodePacket(pkt, d.s)
-	if err != nil {
-		return 0, fmt.Errorf("failed to write packet err=%s", err)
+	if len(prefix) > 0 {
+		return EncodeAndWrite(d.s, val, prefix[0])
 	}
-
-	n, err = sw.Write(p)
-	if err != nil {
-		return 0, err
-	}
-
-	if err := sw.Flush(); err != nil {
-		return 0, err
-	}
-
-	return n, nil
+	return EncodeAndWrite(d.s, val)
 }
 
 // write raw bytes to stream
@@ -130,52 +124,57 @@ func (d *StreamCodec) readPacket(p communication.Packet) (ctx *communication.Str
 	return c, nil
 }
 
-func encodePacket(pkt communication.Packet, stream network.Stream) ([]byte, *snappy.Writer, error) {
-	if val, ok := pkt.(ssz.Marshaler); ok {
-		wr := bufio.NewWriter(stream)
-		sw := snappy.NewWriter(wr)
-		p := make([]byte, 10)
-
-		vin := binary.PutVarint(p, int64(val.SizeSSZ()))
-
-		enc, err := val.MarshalSSZ()
-		if err != nil {
-			return nil, nil, fmt.Errorf("marshal ssz: %w", err)
-		}
-
-		if len(enc) > int(clparams.MaxChunkSize) {
-			return nil, nil, fmt.Errorf("chunk size too big")
-		}
-
-		_, err = wr.Write(p[:vin])
-		if err != nil {
-			return nil, nil, fmt.Errorf("write varint: %w", err)
-		}
-
-		return enc, sw, nil
+func EncodeAndWrite(w io.Writer, val ssz.Marshaler, prefix ...byte) error {
+	// create prefix for length of packet
+	lengthBuf := make([]byte, 10)
+	vin := binary.PutUvarint(lengthBuf, uint64(val.SizeSSZ()))
+	// Create writer size
+	wr := bufio.NewWriterSize(w, 10+val.SizeSSZ())
+	defer wr.Flush()
+	// Write length of packet
+	wr.Write(prefix)
+	wr.Write(lengthBuf[:vin])
+	// start using streamed snappy compression
+	sw := snappy.NewBufferedWriter(wr)
+	defer sw.Flush()
+	// Marshall and snap it
+	xs := make([]byte, 0, val.SizeSSZ())
+	enc, err := val.MarshalSSZTo(xs)
+	if err != nil {
+		return err
 	}
-
-	return nil, nil, fmt.Errorf("packet %s does not implement ssz.Marshaler", reflect.TypeOf(pkt))
+	_, err = sw.Write(enc)
+	return err
 }
 
-func readUvarint(r io.Reader) (uint64, error) {
-	var x uint64
-	var s uint
-	bs := [1]byte{}
-	for i := 0; i < 10; i++ {
-		_, err := r.Read(bs[:])
-		if err != nil {
-			return x, err
-		}
-		b := bs[0]
-		if b < 0x80 {
-			if i == 10-1 && b > 1 {
-				return x, errors.New("readUvarint: overflow")
-			}
-			return x | uint64(b)<<s, nil
-		}
-		x |= uint64(b&0x7f) << s
-		s += 7
+func DecodeAndRead(r io.Reader, val ssz.Unmarshaler) error {
+	ln, err := readUvarint(r)
+	if err != nil {
+		return err
 	}
-	return x, errors.New("readUvarint: overflow")
+	sr := snappy.NewReader(r)
+	raw := make([]byte, ln)
+	_, err = io.ReadFull(sr, raw)
+	if err != nil {
+		return fmt.Errorf("readPacket: %w", err)
+	}
+	return val.UnmarshalSSZ(raw)
+}
+
+func readUvarint(r io.Reader) (x uint64, err error) {
+	currByte := make([]byte, 1)
+	for shift := uint(0); shift < 64; shift += 7 {
+		_, err := r.Read(currByte)
+		if err != nil {
+			return 0, err
+		}
+		b := uint64(currByte[0])
+		x |= (b & 0x7F) << shift
+		if (b & 0x80) == 0 {
+			return x, nil
+		}
+	}
+
+	// The number is too large to represent in a 64-bit value.
+	return 0, nil
 }

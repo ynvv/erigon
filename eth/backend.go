@@ -52,6 +52,7 @@ import (
 	"github.com/ledgerwatch/erigon/cmd/lightclient/clparams"
 	"github.com/ledgerwatch/erigon/cmd/lightclient/lightclient"
 	"github.com/ledgerwatch/erigon/cmd/lightclient/sentinel"
+	"github.com/ledgerwatch/erigon/cmd/lightclient/sentinel/service"
 	"github.com/ledgerwatch/erigon/cmd/rpcdaemon/cli"
 	"github.com/ledgerwatch/erigon/cmd/rpcdaemon/commands"
 	"github.com/ledgerwatch/erigon/cmd/sentry/sentry"
@@ -458,19 +459,24 @@ func New(stack *node.Node, config *ethconfig.Config, logger log.Logger) (*Ethere
 	if config.CL {
 		// Chains supported are Sepolia, Mainnet and Goerli
 		if config.NetworkID == 1 || config.NetworkID == 5 || config.NetworkID == 11155111 {
-			lightclientSrv := lightclient.NewLightclientServerInternal(ethBackendRPC)
 			genesisCfg, networkCfg, beaconCfg := clparams.GetConfigsByNetwork(clparams.NetworkType(config.NetworkID))
 			if err != nil {
 				return nil, err
 			}
-			go sentinel.RunSentinelServiceInternally(lightclientSrv, &sentinel.SentinelConfig{
+			client, err := service.StartSentinelService(&sentinel.SentinelConfig{
 				IpAddr:        "127.0.0.1",
 				Port:          4000,
 				TCPPort:       4001,
 				GenesisConfig: genesisCfg,
 				NetworkConfig: networkCfg,
 				BeaconConfig:  beaconCfg,
-			})
+			}, &service.ServerConfig{Network: "tcp", Addr: "localhost:7777"})
+			if err != nil {
+				return nil, err
+			}
+
+			lc := lightclient.NewLightClient(ethBackendRPC, client)
+			go lc.Start(ctx)
 		} else {
 			log.Warn("Cannot run lightclient on a non-supported chain. only goerli, sepolia and mainnet are allowed")
 		}
@@ -879,7 +885,7 @@ func (s *Ethereum) setUpBlockReader(ctx context.Context, dirs datadir.Dirs, snCo
 	}
 
 	dir.MustExist(dirs.SnapHistory)
-	agg, err := libstate.NewAggregator22(dirs.SnapHistory, ethconfig.HistoryV3AggregationStep)
+	agg, err := libstate.NewAggregator22(dirs.SnapHistory, ethconfig.HistoryV3AggregationStep, s.chainDB)
 	if err != nil {
 		return nil, nil, nil, err
 	}

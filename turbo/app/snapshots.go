@@ -219,7 +219,7 @@ func doIndicesCommand(cliCtx *cli.Context) error {
 	if err := rebuildIndices("Indexing", ctx, chainDB, cfg, dirs, from, workers); err != nil {
 		log.Error("Error", "err", err)
 	}
-	agg, err := libstate.NewAggregator22(dirs.SnapHistory, ethconfig.HistoryV3AggregationStep)
+	agg, err := libstate.NewAggregator22(dirs.SnapHistory, ethconfig.HistoryV3AggregationStep, chainDB)
 	if err != nil {
 		return err
 	}
@@ -369,6 +369,22 @@ func doRetireCommand(cliCtx *cli.Context) error {
 		}); err != nil {
 			return err
 		}
+	}
+
+	agg, err := libstate.NewAggregator22(dirs.SnapHistory, ethconfig.HistoryV3AggregationStep, db)
+	if err != nil {
+		return err
+	}
+	err = agg.ReopenFiles()
+	if err != nil {
+		return err
+	}
+	agg.SetWorkers(estimate.CompressSnapshot.Workers())
+	if err = agg.BuildMissedIndices(); err != nil {
+		return err
+	}
+	if err = agg.Merge(); err != nil {
+		return err
 	}
 
 	return nil

@@ -506,7 +506,7 @@ func handleNewPayload(
 			}
 			if success {
 				// If we downloaded the headers in time, then save them and proceed with the new header
-				verifyAndSaveDownloadedPoSHeaders(tx, cfg, headerInserter)
+				saveDownloadedPoSHeaders(tx, cfg, headerInserter, true /* validate */)
 			} else {
 				return &engineapi.PayloadStatus{Status: remote.EngineStatus_SYNCING}, nil
 			}
@@ -609,7 +609,7 @@ func schedulePoSDownload(
 
 	//nolint
 	headerCollector := etl.NewCollector(s.LogPrefix(), cfg.tmpdir, etl.NewSortableBuffer(etl.BufferOptimalSize))
-	// headerCollector is closed in verifyAndSaveDownloadedPoSHeaders, thus nolint
+	// headerCollector is closed in saveDownloadedPoSHeaders, thus nolint
 
 	cfg.hd.SetHeadersCollector(headerCollector)
 
@@ -618,7 +618,7 @@ func schedulePoSDownload(
 	return true
 }
 
-func verifyAndSaveDownloadedPoSHeaders(tx kv.RwTx, cfg HeadersCfg, headerInserter *headerdownload.HeaderInserter) {
+func saveDownloadedPoSHeaders(tx kv.RwTx, cfg HeadersCfg, headerInserter *headerdownload.HeaderInserter, validate bool) {
 	var lastValidHash common.Hash
 	var badChainError error
 	var foundPow bool
@@ -653,14 +653,16 @@ func verifyAndSaveDownloadedPoSHeaders(tx kv.RwTx, cfg HeadersCfg, headerInserte
 			return headerInserter.FeedHeaderPoS(tx, &h, h.Hash())
 		}
 		// Validate state if possible (bodies will be retrieved through body download)
-		_, _, validationError, criticalError := cfg.forkValidator.ValidatePayload(tx, &h, nil, false)
-		if criticalError != nil {
-			return criticalError
-		}
-		if validationError != nil {
-			badChainError = validationError
-			cfg.hd.ReportBadHeaderPoS(h.Hash(), lastValidHash)
-			return nil
+		if validate {
+			_, _, validationError, criticalError := cfg.forkValidator.ValidatePayload(tx, &h, nil, false)
+			if criticalError != nil {
+				return criticalError
+			}
+			if validationError != nil {
+				badChainError = validationError
+				cfg.hd.ReportBadHeaderPoS(h.Hash(), lastValidHash)
+				return nil
+			}
 		}
 
 		return headerInserter.FeedHeaderPoS(tx, &h, h.Hash())
@@ -713,7 +715,7 @@ func handleInterrupt(interrupt engineapi.Interrupt, cfg HeadersCfg, tx kv.RwTx, 
 			return false, fmt.Errorf("server is stopping")
 		}
 		if interrupt == engineapi.Synced && cfg.hd.HeadersCollector() != nil {
-			verifyAndSaveDownloadedPoSHeaders(tx, cfg, headerInserter)
+			saveDownloadedPoSHeaders(tx, cfg, headerInserter, false /* validate */)
 		}
 		if !useExternalTx {
 			return true, tx.Commit()
