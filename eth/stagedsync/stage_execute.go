@@ -425,7 +425,10 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		effectiveEngine = asyncEngine.(consensus.Engine)
 	}
 
-	const maxBlocks uint64 = 1000
+	maxBlocks := uint64(1000)
+	if stageProgress >= 9186000 {
+		maxBlocks = 1
+	}
 	if to > stageProgress+maxBlocks {
 		to = stageProgress + maxBlocks
 	}
