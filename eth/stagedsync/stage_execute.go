@@ -3,7 +3,6 @@ package stagedsync
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -425,7 +424,13 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		asyncEngine = asyncEngine.WithExecutionContext(ctx)
 		effectiveEngine = asyncEngine.(consensus.Engine)
 	}
-Loop:
+
+	const maxBlocks uint64 = 1000
+	if to > stageProgress+maxBlocks {
+		to = stageProgress + maxBlocks
+	}
+
+	//Loop:
 	for blockNum := stageProgress + 1; blockNum <= to; blockNum++ {
 		if stoppedErr = common.Stopped(quit); stoppedErr != nil {
 			break
@@ -451,17 +456,23 @@ Loop:
 		writeReceipts := nextStagesExpectData || blockNum > cfg.prune.Receipts.PruneTo(to)
 		writeCallTraces := nextStagesExpectData || blockNum > cfg.prune.CallTraces.PruneTo(to)
 		if err = executeBlock(block, tx, batch, cfg, *cfg.vmConfig, writeChangeSets, writeReceipts, writeCallTraces, initialCycle, effectiveEngine); err != nil {
-			if !errors.Is(err, context.Canceled) {
-				log.Warn(fmt.Sprintf("[%s] Execution failed", logPrefix), "block", blockNum, "hash", block.Hash().String(), "err", err)
-				if cfg.hd != nil {
-					cfg.hd.ReportBadHeaderPoS(blockHash, block.ParentHash())
+			s.Update(batch, blockNum-1)
+			batch.Commit()
+			tx.Commit()
+			panic(err)
+			/*
+				if !errors.Is(err, context.Canceled) {
+					log.Warn(fmt.Sprintf("[%s] Execution failed", logPrefix), "block", blockNum, "hash", block.Hash().String(), "err", err)
+					if cfg.hd != nil {
+						cfg.hd.ReportBadHeaderPoS(blockHash, block.ParentHash())
+					}
+					if cfg.badBlockHalt {
+						return err
+					}
 				}
-				if cfg.badBlockHalt {
-					return err
-				}
-			}
-			u.UnwindTo(blockNum-1, block.Hash())
-			break Loop
+				u.UnwindTo(blockNum-1, block.Hash())
+				break Loop
+			*/
 		}
 		stageProgress = blockNum
 
