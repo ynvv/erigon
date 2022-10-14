@@ -6,10 +6,19 @@ import (
 	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
 )
 
+type ForwardResult uint8 // Result of the forward function, or "execution function"
+
+const (
+	ForwardAborted           ForwardResult = iota // Not completed the stage and not commited - due to error
+	ForwardCompleted                              // Completed the stage but not commited
+	ForwardCommited                               // Commited the DB transaction, but not completed the stage yet - to be called again with the fresh DB transaction
+	ForwardCompletedCommited                      // Completed the stage and also committed the DB transaction
+)
+
 // ExecFunc is the execution function for the stage to move forward.
 // * state - is the current state of the stage and contains stage data.
 // * unwinder - if the stage needs to cause unwinding, `unwinder` methods can be used.
-type ExecFunc func(firstCycle bool, badBlockUnwind bool, s *StageState, unwinder Unwinder, tx kv.RwTx, quiet bool) error
+type ExecFunc func(firstCycle bool, badBlockUnwind bool, s *StageState, unwinder Unwinder, tx kv.RwTx, quiet bool) (ForwardResult, error)
 
 // UnwindFunc is the unwinding logic of the stage.
 // * unwindState - contains information about the unwind itself.

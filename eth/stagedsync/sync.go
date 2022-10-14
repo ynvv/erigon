@@ -335,17 +335,17 @@ func PrintTables(db kv.RoDB, tx kv.RwTx) []interface{} {
 	return bucketSizes
 }
 
-func (s *Sync) runStage(stage *Stage, db kv.RwDB, tx kv.RwTx, firstCycle bool, badBlockUnwind bool, quiet bool) (err error) {
+func (s *Sync) runStage(stage *Stage, db kv.RwDB, tx kv.RwTx, firstCycle bool, badBlockUnwind bool, quiet bool) (result ForwardResult, err error) {
 	start := time.Now()
 	stageState, err := s.StageState(stage.ID, tx, db)
 	if err != nil {
-		return err
+		return ForwardAborted, err
 	}
 
-	if err = stage.Forward(firstCycle, badBlockUnwind, stageState, s, tx, quiet); err != nil {
+	if result, err = stage.Forward(firstCycle, badBlockUnwind, stageState, s, tx, quiet); err != nil {
 		wrappedError := fmt.Errorf("[%s] %w", s.LogPrefix(), err)
 		log.Debug("Error while executing stage", "err", wrappedError)
-		return wrappedError
+		return ForwardAborted, wrappedError
 	}
 
 	took := time.Since(start)
@@ -356,7 +356,7 @@ func (s *Sync) runStage(stage *Stage, db kv.RwDB, tx kv.RwTx, firstCycle bool, b
 		log.Debug(fmt.Sprintf("[%s] DONE", logPrefix), "in", took)
 	}
 	s.timings = append(s.timings, Timing{stage: stage.ID, took: took})
-	return nil
+	return
 }
 
 func (s *Sync) unwindStage(firstCycle bool, stage *Stage, db kv.RwDB, tx kv.RwTx) error {
