@@ -475,7 +475,7 @@ func New(stack *node.Node, config *ethconfig.Config, logger log.Logger) (*Ethere
 				return nil, err
 			}
 
-			lc := lightclient.NewLightClient(ethBackendRPC, client)
+			lc := lightclient.NewLightClient(genesisCfg, beaconCfg, ethBackendRPC, client)
 			go lc.Start(ctx)
 		} else {
 			log.Warn("Cannot run lightclient on a non-supported chain. only goerli, sepolia and mainnet are allowed")
@@ -885,7 +885,7 @@ func (s *Ethereum) setUpBlockReader(ctx context.Context, dirs datadir.Dirs, snCo
 	}
 
 	dir.MustExist(dirs.SnapHistory)
-	agg, err := libstate.NewAggregator22(dirs.SnapHistory, ethconfig.HistoryV3AggregationStep, s.chainDB)
+	agg, err := libstate.NewAggregator22(dirs.SnapHistory, dirs.Tmp, ethconfig.HistoryV3AggregationStep, s.chainDB)
 	if err != nil {
 		return nil, nil, nil, err
 	}
