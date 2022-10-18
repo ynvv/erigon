@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"math/big"
 	"runtime"
 	"time"
 
@@ -379,8 +378,6 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		log.Info(fmt.Sprintf("[%s] Blocks execution", logPrefix), "from", s.BlockNumber, "to", to)
 	}
 
-	startTime := time.Now()
-
 	// changes are stored through memory buffer
 	logEvery := time.NewTicker(logInterval)
 	defer logEvery.Stop()
@@ -393,15 +390,6 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 	// Transform batch_size limit into Ggas
 	gasState := uint64(cfg.batchSize) * uint64(datasize.KB) * 2
 
-	startGasUsed, err := rawdb.ReadCumulativeGasUsed(tx, s.BlockNumber)
-	if err != nil {
-		return err
-	}
-
-	totalGasUsed, err := rawdb.ReadCumulativeGasUsed(tx, to)
-	if err != nil {
-		return err
-	}
 	var stoppedErr error
 
 	effectiveEngine := cfg.engine
@@ -495,18 +483,7 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		select {
 		default:
 		case <-logEvery.C:
-			cumulativeGas, err := rawdb.ReadCumulativeGasUsed(tx, blockNum)
-			if err != nil {
-				return err
-			}
-			totalGasTmp := new(big.Int).Set(totalGasUsed)
-			elapsed := time.Since(startTime)
-			estimateRatio := float64(cumulativeGas.Sub(cumulativeGas, startGasUsed).Uint64()) / float64(totalGasTmp.Sub(totalGasTmp, startGasUsed).Uint64())
-			var estimatedTime commonold.PrettyDuration
-			if estimateRatio != 0 {
-				estimatedTime = commonold.PrettyDuration((elapsed.Seconds() / estimateRatio) * float64(time.Second))
-			}
-			logBlock, logTx, logTime = logProgress(logPrefix, logBlock, logTime, blockNum, logTx, lastLogTx, gas, float64(currentStateGas)/float64(gasState), estimatedTime, batch)
+			logBlock, logTx, logTime = logProgress(logPrefix, logBlock, logTime, blockNum, logTx, lastLogTx, gas, float64(currentStateGas)/float64(gasState), batch)
 			gas = 0
 			tx.CollectMetrics()
 			syncMetrics[stages.Execution].Set(blockNum)
@@ -532,7 +509,7 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 	return stoppedErr
 }
 
-func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, currentBlock uint64, prevTx, currentTx uint64, gas uint64, gasState float64, estimatedTime commonold.PrettyDuration, batch ethdb.DbWithPendingMutations) (uint64, uint64, time.Time) {
+func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, currentBlock uint64, prevTx, currentTx uint64, gas uint64, gasState float64, batch ethdb.DbWithPendingMutations) (uint64, uint64, time.Time) {
 	currentTime := time.Now()
 	interval := currentTime.Sub(prevTime)
 	speed := float64(currentBlock-prevBlock) / (float64(interval) / float64(time.Second))
@@ -547,9 +524,6 @@ func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, current
 		"tx/s", fmt.Sprintf("%.1f", speedTx),
 		"Mgas/s", fmt.Sprintf("%.1f", speedMgas),
 		"gasState", fmt.Sprintf("%.2f", gasState),
-	}
-	if estimatedTime > 0 {
-		logpairs = append(logpairs, "estimated duration", estimatedTime)
 	}
 	if batch != nil {
 		logpairs = append(logpairs, "batch", common.ByteCount(uint64(batch.BatchSize())))
