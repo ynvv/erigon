@@ -224,7 +224,7 @@ func StageLoopStep(
 		}
 		updateHead(ctx, head, headHash, headTd256)
 	}
-	if false {
+	if notifications != nil {
 		if notifications.Accumulator != nil {
 			header := rawdb.ReadCurrentHeader(rotx)
 			if header != nil {
