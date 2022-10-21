@@ -50,7 +50,7 @@ type Progress struct {
 	commitThreshold    uint64
 }
 
-func (p *Progress) Log(logPrefix string, rs *state.State22, rws state.TxTaskQueue, count, inputBlockNum, outputBlockNum, repeatCount uint64, resultsSize uint64, resultCh chan *state.TxTask) {
+func (p *Progress) Log(logPrefix string, rs *state.State22, rws state.TxTaskQueue, queueSize, count, inputBlockNum, outputBlockNum, repeatCount uint64, resultsSize uint64, resultCh chan *state.TxTask) {
 	var m runtime.MemStats
 	common.ReadMemStats(&m)
 	sizeEstimate := rs.SizeEstimate()
@@ -69,7 +69,7 @@ func (p *Progress) Log(logPrefix string, rs *state.State22, rws state.TxTaskQueu
 		"blk/s", fmt.Sprintf("%.1f", speedBlock),
 		"tx/s", fmt.Sprintf("%.1f", speedTx),
 		"resultCh", fmt.Sprintf("%d/%d", len(resultCh), cap(resultCh)),
-		"resultQueue", rws.Len(),
+		"resultQueue", fmt.Sprintf("%d/%d", rws.Len(), queueSize),
 		"resultsSize", common.ByteCount(resultsSize),
 		"repeatRatio", fmt.Sprintf("%.2f%%", repeatRatio),
 		"buffer", fmt.Sprintf("%s/%s", common.ByteCount(sizeEstimate), common.ByteCount(p.commitThreshold)),
@@ -198,7 +198,7 @@ func Exec3(ctx context.Context,
 						rwsReceiveCond.Signal()
 					}()
 				case <-logEvery.C:
-					progress.Log(execStage.LogPrefix(), rs, rws, rs.DoneCount(), inputBlockNum.Load(), outputBlockNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh)
+					progress.Log(execStage.LogPrefix(), rs, rws, uint64(queueSize), rs.DoneCount(), inputBlockNum.Load(), outputBlockNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh)
 					sizeEstimate := rs.SizeEstimate()
 					//prevTriggerCount = triggerCount
 					if sizeEstimate >= commitThreshold {
@@ -296,7 +296,9 @@ func Exec3(ctx context.Context,
 		}()
 	}
 
-	defer agg.StartWrites().FinishWrites()
+	if !parallel {
+		defer agg.StartWrites().FinishWrites()
+	}
 
 	var b *types.Block
 	var blockNum uint64
@@ -318,20 +320,22 @@ loop:
 			}()
 		}
 		txs := b.Transactions()
+		skipAnalysis := core.SkipAnalysis(chainConfig, blockNum)
 		for txIndex := -1; txIndex <= len(txs); txIndex++ {
 			// Do not oversend, wait for the result heap to go under certain size
 			txTask := &state.TxTask{
-				BlockNum:  blockNum,
-				Rules:     rules,
-				Block:     b,
-				TxNum:     inputTxNum,
-				TxIndex:   txIndex,
-				BlockHash: b.Hash(),
-				Final:     txIndex == len(txs),
+				BlockNum:     blockNum,
+				Rules:        rules,
+				Block:        b,
+				TxNum:        inputTxNum,
+				TxIndex:      txIndex,
+				BlockHash:    b.Hash(),
+				SkipAnalysis: skipAnalysis,
+				Final:        txIndex == len(txs),
 			}
 			if txIndex >= 0 && txIndex < len(txs) {
 				txTask.Tx = txs[txIndex]
-				txTask.TxAsMessage, err = txTask.Tx.AsMessage(*types.MakeSigner(chainConfig, txTask.BlockNum), txTask.Block.Header().BaseFee, txTask.Rules)
+				txTask.TxAsMessage, err = txTask.Tx.AsMessage(*types.MakeSigner(chainConfig, txTask.BlockNum), txTask.Block.HeaderNoCopy().BaseFee, txTask.Rules)
 				if err != nil {
 					panic(err)
 				}
@@ -402,7 +406,7 @@ loop:
 		// Check for interrupts
 		select {
 		case <-logEvery.C:
-			progress.Log(execStage.LogPrefix(), rs, rws, count, inputBlockNum.Load(), outputBlockNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh)
+			progress.Log(execStage.LogPrefix(), rs, rws, uint64(queueSize), count, inputBlockNum.Load(), outputBlockNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh)
 		case <-interruptCh:
 			log.Info(fmt.Sprintf("interrupted, please wait for cleanup, next run will start with block %d", blockNum))
 			maxTxNum.Store(inputTxNum)
@@ -492,23 +496,6 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 	defer agg.EnableMadvNormal().DisableReadAhead()
 	blockSnapshots := blockReader.(WithSnapshots).Snapshots()
 
-	reconDbPath := filepath.Join(dirs.DataDir, "recondb")
-	dir.Recreate(reconDbPath)
-	reconDbPath = filepath.Join(reconDbPath, "mdbx.dat")
-	db, err := kv2.NewMDBX(log.New()).Path(reconDbPath).
-		Flags(func(u uint) uint {
-			return mdbx.UtterlyNoSync | mdbx.NoMetaSync | mdbx.Exclusive | mdbx.NoMemInit | mdbx.LifoReclaim | mdbx.WriteMap | mdbx.NoSubdir
-		}).
-		WriteMergeThreshold(8192).
-		PageSize(uint64(16 * datasize.KB)).
-		WithTableCfg(func(defaultBuckets kv.TableCfg) kv.TableCfg { return kv.ReconTablesCfg }).
-		Open()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	defer os.RemoveAll(reconDbPath)
-
 	var ok bool
 	var blockNum uint64 // First block which is not covered by the history snapshot files
 	if err := chainDb.View(ctx, func(tx kv.Tx) error {
@@ -591,6 +578,23 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 	}
 	log.Info("Scan accounts history", "took", time.Since(t))
 
+	reconDbPath := filepath.Join(dirs.DataDir, "recondb")
+	dir.Recreate(reconDbPath)
+	reconDbPath = filepath.Join(reconDbPath, "mdbx.dat")
+	db, err := kv2.NewMDBX(log.New()).Path(reconDbPath).
+		Flags(func(u uint) uint {
+			return mdbx.UtterlyNoSync | mdbx.NoMetaSync | mdbx.Exclusive | mdbx.NoMemInit | mdbx.LifoReclaim | mdbx.WriteMap | mdbx.NoSubdir
+		}).
+		WriteMergeThreshold(8192).
+		PageSize(uint64(16 * datasize.KB)).
+		WithTableCfg(func(defaultBuckets kv.TableCfg) kv.TableCfg { return kv.ReconTablesCfg }).
+		Open()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	defer os.RemoveAll(reconDbPath)
+
 	accountCollectorX := etl.NewCollector("account scan total X", dirs.Tmp, etl.NewSortableBuffer(etl.BufferOptimalSize))
 	defer accountCollectorX.Close()
 	accountCollectorX.LogLvl(log.LvlDebug)
@@ -603,6 +607,7 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 		accountCollectorsX[i].Close()
 		accountCollectorsX[i] = nil
 	}
+
 	if err = db.Update(ctx, func(tx kv.RwTx) error {
 		return accountCollectorX.Load(tx, kv.XAccount, etl.IdentityLoadFunc, etl.TransformArgs{})
 	}); err != nil {
@@ -812,21 +817,23 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 			return err
 		}
 		txs := b.Transactions()
+		skipAnalysis := core.SkipAnalysis(chainConfig, blockNum)
 		for txIndex := -1; txIndex <= len(txs); txIndex++ {
 			if bitmap.Contains(inputTxNum) {
 				binary.BigEndian.PutUint64(txKey[:], inputTxNum)
 				txTask := &state.TxTask{
-					BlockNum:  bn,
-					Block:     b,
-					Rules:     rules,
-					TxNum:     inputTxNum,
-					TxIndex:   txIndex,
-					BlockHash: b.Hash(),
-					Final:     txIndex == len(txs),
+					BlockNum:     bn,
+					Block:        b,
+					Rules:        rules,
+					TxNum:        inputTxNum,
+					TxIndex:      txIndex,
+					BlockHash:    b.Hash(),
+					SkipAnalysis: skipAnalysis,
+					Final:        txIndex == len(txs),
 				}
 				if txIndex >= 0 && txIndex < len(txs) {
 					txTask.Tx = txs[txIndex]
-					txTask.TxAsMessage, err = txTask.Tx.AsMessage(*types.MakeSigner(chainConfig, txTask.BlockNum), txTask.Block.Header().BaseFee, txTask.Rules)
+					txTask.TxAsMessage, err = txTask.Tx.AsMessage(*types.MakeSigner(chainConfig, txTask.BlockNum), txTask.Block.HeaderNoCopy().BaseFee, txTask.Rules)
 					if err != nil {
 						panic(err)
 					}
@@ -853,11 +860,11 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 	}); err != nil {
 		return err
 	}
-	plainStateCollector := etl.NewCollector("recon plainState", dirs.Tmp, etl.NewSortableBuffer(etl.BufferOptimalSize))
+	plainStateCollector := etl.NewCollector("recon plainState", dirs.Tmp, etl.NewSortableBuffer(etl.BufferOptimalSize/2))
 	defer plainStateCollector.Close()
-	codeCollector := etl.NewCollector("recon code", dirs.Tmp, etl.NewOldestEntryBuffer(etl.BufferOptimalSize))
+	codeCollector := etl.NewCollector("recon code", dirs.Tmp, etl.NewOldestEntryBuffer(etl.BufferOptimalSize/2))
 	defer codeCollector.Close()
-	plainContractCollector := etl.NewCollector("recon plainContract", dirs.Tmp, etl.NewSortableBuffer(etl.BufferOptimalSize))
+	plainContractCollector := etl.NewCollector("recon plainContract", dirs.Tmp, etl.NewSortableBuffer(etl.BufferOptimalSize/2))
 	defer plainContractCollector.Close()
 	if err = db.View(ctx, func(roTx kv.Tx) error {
 		kv.ReadAhead(ctx, db, atomic2.NewBool(false), kv.PlainStateR, nil, math.MaxUint32)
@@ -968,6 +975,7 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 			"alloc", common.ByteCount(m.Alloc), "sys", common.ByteCount(m.Sys),
 		)
 	}
+	db.Close()
 	// Load all collections into the main collector
 	for i := 0; i < workerCount; i++ {
 		if err = plainStateCollectors[i].Load(nil, "", func(k, v []byte, table etl.CurrentTableReader, next etl.LoadNextFunc) error {
