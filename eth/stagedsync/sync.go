@@ -209,10 +209,16 @@ func (s *Sync) RunUnwind(db kv.RwDB, tx kv.RwTx) error {
 	}
 	return nil
 }
-func (s *Sync) Run(db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) error {
+func (s *Sync) Run(ctx context.Context, db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) (committed bool, err error) {
+	defer func() {
+		if committed && tx != nil {
+			tx.Rollback()
+		}
+	}()
 	s.prevUnwindPoint = nil
 	s.timings = s.timings[:0]
 
+	var commitAfterEachStage bool
 	for !s.IsDone() {
 		var badBlockUnwind bool
 		if s.unwindPoint != nil {
@@ -220,8 +226,8 @@ func (s *Sync) Run(db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) error {
 				if s.unwindOrder[j] == nil || s.unwindOrder[j].Disabled || s.unwindOrder[j].Unwind == nil {
 					continue
 				}
-				if err := s.unwindStage(firstCycle, s.unwindOrder[j], db, tx); err != nil {
-					return err
+				if err = s.unwindStage(firstCycle, s.unwindOrder[j], db, tx); err != nil {
+					return committed, err
 				}
 			}
 			s.prevUnwindPoint = s.unwindPoint
@@ -230,8 +236,8 @@ func (s *Sync) Run(db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) error {
 				badBlockUnwind = true
 			}
 			s.badBlock = common.Hash{}
-			if err := s.SetCurrentStage(s.stages[0].ID); err != nil {
-				return err
+			if err = s.SetCurrentStage(s.stages[0].ID); err != nil {
+				return committed, err
 			}
 			// If there were unwinds at the start, a heavier but invalid chain may be present, so
 			// we relax the rules for Stage1
@@ -242,7 +248,7 @@ func (s *Sync) Run(db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) error {
 
 		if string(stage.ID) == debug.StopBeforeStage() { // stop process for debugging reasons
 			log.Warn("STOP_BEFORE_STAGE env flag forced to stop app")
-			return libcommon.ErrStopped
+			return committed, libcommon.ErrStopped
 		}
 
 		if stage.Disabled || stage.Forward == nil {
@@ -252,13 +258,41 @@ func (s *Sync) Run(db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) error {
 			continue
 		}
 
-		if err := s.runStage(stage, db, tx, firstCycle, badBlockUnwind, quiet); err != nil {
-			return err
+		if commitAfterEachStage && tx == nil {
+			if tx, err = db.BeginRw(ctx); err != nil {
+				return committed, err
+			}
+		}
+
+		var result ForwardResult
+		// When a stage cannot be completed within one transaction, it will return ForwardPartial
+		// And it will be called repeatedly until it either completes, or aborts, or gets interrupted
+		for {
+			if result, err = s.runStage(stage, db, tx, firstCycle, badBlockUnwind, quiet); err != nil {
+				return committed, err
+			}
+			if result != ForwardPartial {
+				break
+			}
+			commitAfterEachStage = true
+			if err = tx.Commit(); err != nil {
+				return committed, err
+			}
+			tx = nil
+			committed = true
+		}
+		if commitAfterEachStage || result == ForwardCompletedToCommit {
+			commitAfterEachStage = true
+			if err = tx.Commit(); err != nil {
+				return committed, err
+			}
+			tx = nil
+			committed = true
 		}
 
 		if string(stage.ID) == debug.StopAfterStage() { // stop process for debugging reasons
 			log.Warn("STOP_AFTER_STAGE env flag forced to stop app")
-			return libcommon.ErrStopped
+			return committed, libcommon.ErrStopped
 		}
 
 		s.NextStage()
@@ -269,15 +303,15 @@ func (s *Sync) Run(db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) error {
 			continue
 		}
 		if err := s.pruneStage(firstCycle, s.pruningOrder[i], db, tx); err != nil {
-			return err
+			return committed, err
 		}
 	}
 	if err := s.SetCurrentStage(s.stages[0].ID); err != nil {
-		return err
+		return committed, err
 	}
 
 	s.currentStage = 0
-	return nil
+	return committed, nil
 }
 
 func (s *Sync) PrintTimings() []interface{} {

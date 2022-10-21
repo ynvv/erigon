@@ -9,10 +9,11 @@ import (
 type ForwardResult uint8 // Result of the forward function, or "execution function"
 
 const (
-	ForwardAborted           ForwardResult = iota // Not completed the stage and not commited - due to error
-	ForwardCompleted                              // Completed the stage but not commited
-	ForwardCommited                               // Commited the DB transaction, but not completed the stage yet - to be called again with the fresh DB transaction
-	ForwardCompletedCommited                      // Completed the stage and also committed the DB transaction
+	ForwardAborted           ForwardResult = iota // Aborted due to error
+	ForwardInterrupted                            // Interrupted - requires commit but not continuation of the stage loop
+	ForwardPartial                                // Requires commit but the current stage is not completed
+	ForwardCompleted                              // Completed the stage but not necessary requires commit
+	ForwardCompletedToCommit                      // Completed the stage and requies a commit because the entire stage is likely too large for 1 transaction
 )
 
 // ExecFunc is the execution function for the stage to move forward.

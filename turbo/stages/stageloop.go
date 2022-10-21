@@ -155,29 +155,25 @@ func StageLoopStep(
 		return headBlockHash, err
 	}
 
-	canRunCycleInOneTransaction := !initialCycle && highestSeenHeader < origin+8096 && highestSeenHeader < finishProgressBefore+8096
-
 	var tx kv.RwTx // on this variable will run sync cycle.
-	if canRunCycleInOneTransaction {
-		tx, err = db.BeginRw(context.Background())
-		if err != nil {
-			return headBlockHash, err
-		}
-		defer tx.Rollback()
+	tx, err = db.BeginRw(ctx)
+	if err != nil {
+		return headBlockHash, err
 	}
+	defer tx.Rollback()
 
-	if notifications != nil && notifications.Accumulator != nil && canRunCycleInOneTransaction {
-		notifications.Accumulator.Reset(tx.ViewID())
-	}
-
-	err = sync.Run(db, tx, initialCycle, false /* quiet */)
+	var committed bool // Indication whether this step had to be commited due to potentially large transaction
+	committed, err = sync.Run(ctx, db, tx, initialCycle, false /* quiet */)
 	if err != nil {
 		return headBlockHash, err
 	}
 	logCtx := sync.PrintTimings()
 	var tableSizes []interface{}
 	var commitTime time.Duration
-	if canRunCycleInOneTransaction {
+	if !committed { // Everything was done within a single transaction
+		if notifications != nil && notifications.Accumulator != nil {
+			notifications.Accumulator.Reset(tx.ViewID())
+		}
 		tableSizes = stagedsync.PrintTables(db, tx) // Need to do this before commit to access tx
 		commitStart := time.Now()
 		errTx := tx.Commit()
@@ -206,7 +202,7 @@ func StageLoopStep(
 		return headBlockHash, err
 	}
 	headBlockHash = rawdb.ReadHeadBlockHash(rotx)
-	if canRunCycleInOneTransaction && (head != finishProgressBefore || commitTime > 500*time.Millisecond) {
+	if !committed && (head != finishProgressBefore || commitTime > 500*time.Millisecond) {
 		log.Info("Commit cycle", "in", commitTime)
 	}
 	if head != finishProgressBefore && len(logCtx) > 0 { // No printing of timings or table sizes if there were no progress
@@ -216,7 +212,7 @@ func StageLoopStep(
 		}
 	}
 
-	if canRunCycleInOneTransaction && snapshotMigratorFinal != nil {
+	if !committed && snapshotMigratorFinal != nil {
 		err = snapshotMigratorFinal(rotx)
 		if err != nil {
 			log.Error("snapshot migration failed", "err", err)

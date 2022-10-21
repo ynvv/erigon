@@ -94,6 +94,9 @@ func SpawnStageHeaders(
 	initialCycle bool,
 	test bool, // Set to true in tests, allows the stage to fail rather than wait indefinitely
 ) error {
+	// Predecision about whether we will commit or not
+	//canRunCycleInOneTransaction := !initialCycle && highestSeenHeader < origin+8096 && highestSeenHeader < finishProgressBefore+8096
+
 	useExternalTx := tx != nil
 	if !useExternalTx {
 		var err error

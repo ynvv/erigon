@@ -1432,8 +1432,8 @@ func TestCVE2020_26265(t *testing.T) {
 			byte(vm.DUP1),        // [0,0]
 			byte(vm.DUP1),        // [0,0,0]
 			byte(vm.DUP1),        // [0,0,0,0]
-			byte(vm.PUSH1), 0x00, // [0,0,0,0,1] (value)
-			byte(vm.PUSH2), 0xaa, 0xaa, // [0,0,0,0,1, 0xaaaa]
+			byte(vm.PUSH1), 0x06, // [0,0,0,0,6] (value)
+			byte(vm.PUSH2), 0xaa, 0xaa, // [0,0,0,0,6, 0xaaaa]
 			byte(vm.GAS),
 			byte(vm.CALL), // Cause self-destruct of aa
 
