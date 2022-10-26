@@ -134,11 +134,6 @@ func StageLoopStep(
 	updateHead func(ctx context.Context, head uint64, hash common.Hash, td *uint256.Int),
 	snapshotMigratorFinal func(tx kv.Tx) error,
 ) (headBlockHash common.Hash, err error) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			err = fmt.Errorf("%+v, trace: %s", rec, dbg.Stack())
-		}
-	}() // avoid crash because Erigon's core does many things
 
 	var origin, finishProgressBefore uint64
 	if err := db.View(ctx, func(tx kv.Tx) error {

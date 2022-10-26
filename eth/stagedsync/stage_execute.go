@@ -3,7 +3,6 @@ package stagedsync
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"runtime"
 	"time"
@@ -414,7 +413,6 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		batch.Rollback()
 	}()
 
-Loop:
 	for blockNum := stageProgress + 1; blockNum <= to; blockNum++ {
 		if stoppedErr = common.Stopped(quit); stoppedErr != nil {
 			break
@@ -440,17 +438,7 @@ Loop:
 		writeReceipts := nextStagesExpectData || blockNum > cfg.prune.Receipts.PruneTo(to)
 		writeCallTraces := nextStagesExpectData || blockNum > cfg.prune.CallTraces.PruneTo(to)
 		if err = executeBlock(block, tx, batch, cfg, *cfg.vmConfig, writeChangeSets, writeReceipts, writeCallTraces, initialCycle, stateStream, effectiveEngine); err != nil {
-			if !errors.Is(err, context.Canceled) {
-				log.Warn(fmt.Sprintf("[%s] Execution failed", logPrefix), "block", blockNum, "hash", block.Hash().String(), "err", err)
-				if cfg.hd != nil {
-					cfg.hd.ReportBadHeaderPoS(blockHash, block.ParentHash())
-				}
-				if cfg.badBlockHalt {
-					return err
-				}
-			}
-			u.UnwindTo(blockNum-1, block.Hash())
-			break Loop
+			panic(err)
 		}
 		stageProgress = blockNum
 
