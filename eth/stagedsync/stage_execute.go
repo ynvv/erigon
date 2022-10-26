@@ -413,6 +413,11 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		batch.Rollback()
 	}()
 
+	maxBlocks := uint64(1000)
+	if to > stageProgress+maxBlocks {
+		to = stageProgress + maxBlocks
+	}
+
 	for blockNum := stageProgress + 1; blockNum <= to; blockNum++ {
 		if stoppedErr = common.Stopped(quit); stoppedErr != nil {
 			break
