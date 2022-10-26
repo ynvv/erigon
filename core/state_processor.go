@@ -37,9 +37,6 @@ func applyTransaction(config *params.ChainConfig, engine consensus.Engine, gp *G
 		return nil, nil, err
 	}
 	msg.SetCheckNonce(!cfg.StatelessExec)
-	msg.SetIsFree(engine.IsServiceTransaction(msg.From(), func(contract common.Address, data []byte) ([]byte, error) {
-		return SysCallContract(contract, data, *config, ibs, header, engine)
-	}))
 
 	if engine != nil {
 		syscall := func(contract common.Address, data []byte) ([]byte, error) {
