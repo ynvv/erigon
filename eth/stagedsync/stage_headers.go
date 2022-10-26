@@ -18,6 +18,7 @@ import (
 	"github.com/ledgerwatch/erigon/common/math"
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/erigon/core/types"
+	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
 	"github.com/ledgerwatch/erigon/ethdb/privateapi"
 	"github.com/ledgerwatch/erigon/params"
 	"github.com/ledgerwatch/erigon/rlp"
@@ -93,22 +94,17 @@ func SpawnStageHeaders(
 	cfg HeadersCfg,
 	initialCycle bool,
 	test bool, // Set to true in tests, allows the stage to fail rather than wait indefinitely
-) error {
+) (ForwardResult, error) {
 	// Predecision about whether we will commit or not
 	//canRunCycleInOneTransaction := !initialCycle && highestSeenHeader < origin+8096 && highestSeenHeader < finishProgressBefore+8096
-
-	useExternalTx := tx != nil
-	if !useExternalTx {
-		var err error
-		tx, err = cfg.db.BeginRw(ctx)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
+	finishProgressBefore, err := stages.GetStageProgress(tx, stages.Finish)
+	if err != nil {
+		return ForwardAborted, err
 	}
+
 	if initialCycle && cfg.snapshots != nil && cfg.snapshots.Cfg().Enabled {
 		if err := cfg.hd.AddHeadersFromSnapshot(tx, cfg.snapshots.BlocksAvailable(), cfg.blockReader); err != nil {
-			return err
+			return ForwardAborted, err
 		}
 	}
 
@@ -118,12 +114,23 @@ func SpawnStageHeaders(
 	} else {
 		preProgress = s.BlockNumber
 	}
+	var commitThreshold uint64
+	if initialCycle {
+		commitThreshold = math.MaxUint64
+	} else if finishProgressBefore > preProgress {
+		commitThreshold = finishProgressBefore + 8096
+	} else {
+		commitThreshold = preProgress + 8096
+	}
 
 	notBorAndParlia := cfg.chainConfig.Bor == nil && cfg.chainConfig.Parlia == nil
 
 	unsettledForkChoice, headHeight := cfg.hd.GetUnsettledForkChoice()
 	if notBorAndParlia && unsettledForkChoice != nil { // some work left to do after unwind
-		return finishHandlingForkChoice(unsettledForkChoice, headHeight, s, tx, cfg, useExternalTx)
+		if err = finishHandlingForkChoice(unsettledForkChoice, headHeight, s, tx, cfg); err != nil {
+			return ForwardAborted, err
+		}
+		return ForwardCompleted, nil
 	}
 
 	transitionedToPoS := cfg.chainConfig.TerminalTotalDifficultyPassed
@@ -131,7 +138,7 @@ func SpawnStageHeaders(
 		var err error
 		transitionedToPoS, err = rawdb.Transitioned(tx, preProgress, cfg.chainConfig.TerminalTotalDifficulty)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 		if transitionedToPoS {
 			cfg.hd.SetFirstPoSHeight(preProgress)
@@ -140,9 +147,9 @@ func SpawnStageHeaders(
 
 	if transitionedToPoS {
 		libcommon.SafeClose(cfg.hd.QuitPoWMining)
-		return HeadersPOS(s, u, ctx, tx, cfg, initialCycle, test, useExternalTx, preProgress)
+		return HeadersPOS(s, u, ctx, tx, cfg, initialCycle, test, preProgress, commitThreshold)
 	} else {
-		return HeadersPOW(s, u, ctx, tx, cfg, initialCycle, test, useExternalTx)
+		return HeadersPOW(s, u, ctx, tx, cfg, initialCycle, test, commitThreshold)
 	}
 }
 
@@ -156,20 +163,9 @@ func HeadersPOS(
 	cfg HeadersCfg,
 	initialCycle bool,
 	test bool,
-	useExternalTx bool,
 	preProgress uint64,
-) error {
-	/*
-		if initialCycle {
-			// Let execution and other stages to finish before waiting for CL, but only if other stages aren't ahead
-			if execProgress, err := stages.GetStageProgress(tx, stages.Execution); err != nil {
-				return err
-			} else if s.BlockNumber >= execProgress {
-				return nil
-			}
-		}
-	*/
-
+	commitThreshold uint64,
+) (ForwardResult, error) {
 	cfg.hd.SetPOSSync(true)
 	syncing := cfg.hd.PosStatus() != headerdownload.Idle
 	if !syncing {
@@ -180,18 +176,21 @@ func HeadersPOS(
 	cfg.hd.SetHeaderReader(&chainReader{config: &cfg.chainConfig, tx: tx, blockReader: cfg.blockReader})
 	headerInserter := headerdownload.NewHeaderInserter(s.LogPrefix(), nil, s.BlockNumber, cfg.blockReader)
 
-	interrupted, err := handleInterrupt(interrupt, cfg, tx, headerInserter, useExternalTx)
+	interrupted, err := handleInterrupt(interrupt, cfg, tx, headerInserter)
 	if err != nil {
-		return err
+		return ForwardAborted, err
 	}
 
 	if interrupted {
-		return nil
+		if headerInserter.GetHighest() >= commitThreshold {
+			return ForwardCompletedToCommit, nil
+		}
+		return ForwardCompleted, nil
 	}
 
 	if requestWithStatus == nil {
 		log.Warn(fmt.Sprintf("[%s] Nil beacon request. Should only happen in tests", s.LogPrefix()))
-		return nil
+		return ForwardCompleted, nil
 	}
 
 	request := requestWithStatus.Message
@@ -214,17 +213,11 @@ func HeadersPOS(
 		if requestStatus == engineapi.New {
 			cfg.hd.PayloadStatusCh <- engineapi.PayloadStatus{CriticalError: err}
 		}
-		return err
-	}
-
-	if !useExternalTx {
-		if err = tx.Commit(); err != nil {
-			return err
-		}
+		return ForwardAborted, err
 	}
 
 	if requestStatus == engineapi.New && payloadStatus != nil {
-		if payloadStatus.Status == remote.EngineStatus_SYNCING || payloadStatus.Status == remote.EngineStatus_ACCEPTED || !useExternalTx {
+		if payloadStatus.Status == remote.EngineStatus_SYNCING || payloadStatus.Status == remote.EngineStatus_ACCEPTED {
 			cfg.hd.PayloadStatusCh <- *payloadStatus
 		} else {
 			// Let the stage loop run to the end so that the transaction is committed prior to replying to CL
@@ -232,7 +225,7 @@ func HeadersPOS(
 		}
 	}
 
-	return nil
+	return ForwardCompleted, nil
 }
 
 func writeForkChoiceHashes(
@@ -420,7 +413,6 @@ func finishHandlingForkChoice(
 	s *StageState,
 	tx kv.RwTx,
 	cfg HeadersCfg,
-	useExternalTx bool,
 ) error {
 	log.Info(fmt.Sprintf("[%s] Unsettled forkchoice after unwind", s.LogPrefix()), "height", headHeight, "forkchoice", forkChoice)
 
@@ -442,12 +434,6 @@ func finishHandlingForkChoice(
 
 	if err := s.Update(tx, headHeight); err != nil {
 		return err
-	}
-
-	if !useExternalTx {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
 	}
 
 	if !canonical {
@@ -710,7 +696,7 @@ func forkingPoint(
 	return headerInserter.ForkingPoint(tx, header, parent)
 }
 
-func handleInterrupt(interrupt engineapi.Interrupt, cfg HeadersCfg, tx kv.RwTx, headerInserter *headerdownload.HeaderInserter, useExternalTx bool) (bool, error) {
+func handleInterrupt(interrupt engineapi.Interrupt, cfg HeadersCfg, tx kv.RwTx, headerInserter *headerdownload.HeaderInserter) (bool, error) {
 	if interrupt != engineapi.None {
 		if interrupt == engineapi.Stopping {
 			close(cfg.hd.ShutdownCh)
@@ -718,9 +704,6 @@ func handleInterrupt(interrupt engineapi.Interrupt, cfg HeadersCfg, tx kv.RwTx, 
 		}
 		if interrupt == engineapi.Synced && cfg.hd.HeadersCollector() != nil {
 			saveDownloadedPoSHeaders(tx, cfg, headerInserter, false /* validate */)
-		}
-		if !useExternalTx {
-			return true, tx.Commit()
 		}
 		return true, nil
 	}
@@ -736,13 +719,13 @@ func HeadersPOW(
 	cfg HeadersCfg,
 	initialCycle bool,
 	test bool, // Set to true in tests, allows the stage to fail rather than wait indefinitely
-	useExternalTx bool,
-) error {
+	commitThreshold uint64,
+) (ForwardResult, error) {
 	var headerProgress uint64
 	var err error
 
 	if err = cfg.hd.ReadProgressFromDb(tx); err != nil {
-		return err
+		return ForwardAborted, err
 	}
 	cfg.hd.SetPOSSync(false)
 	cfg.hd.SetFetchingNew(true)
@@ -752,36 +735,31 @@ func HeadersPOW(
 	// Check if this is called straight after the unwinds, which means we need to create new canonical markings
 	hash, err := rawdb.ReadCanonicalHash(tx, headerProgress)
 	if err != nil {
-		return err
+		return ForwardAborted, err
 	}
 	logEvery := time.NewTicker(logInterval)
 	defer logEvery.Stop()
 	if hash == (common.Hash{}) {
 		headHash := rawdb.ReadHeadHeaderHash(tx)
 		if err = fixCanonicalChain(logPrefix, logEvery, headerProgress, headHash, tx, cfg.blockReader); err != nil {
-			return err
+			return ForwardAborted, err
 		}
-		if !useExternalTx {
-			if err = tx.Commit(); err != nil {
-				return err
-			}
-		}
-		return nil
+		return ForwardCompleted, nil
 	}
 
 	// Allow other stages to run 1 cycle if no network available
 	if initialCycle && cfg.noP2PDiscovery {
-		return nil
+		return ForwardCompleted, nil
 	}
 
 	log.Info(fmt.Sprintf("[%s] Waiting for headers...", logPrefix), "from", headerProgress)
 
 	localTd, err := rawdb.ReadTd(tx, hash, headerProgress)
 	if err != nil {
-		return err
+		return ForwardAborted, err
 	}
 	if localTd == nil {
-		return fmt.Errorf("localTD is nil: %d, %x", headerProgress, hash)
+		return ForwardAborted, fmt.Errorf("localTD is nil: %d, %x", headerProgress, hash)
 	}
 	headerInserter := headerdownload.NewHeaderInserter(logPrefix, localTd, headerProgress, cfg.blockReader)
 	cfg.hd.SetHeaderReader(&chainReader{config: &cfg.chainConfig, tx: tx, blockReader: cfg.blockReader})
@@ -797,11 +775,11 @@ Loop:
 
 		transitionedToPoS, err := rawdb.Transitioned(tx, headerProgress, cfg.chainConfig.TerminalTotalDifficulty)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 		if transitionedToPoS {
 			if err := s.Update(tx, headerProgress); err != nil {
-				return err
+				return ForwardAborted, err
 			}
 			break
 		}
@@ -850,7 +828,7 @@ Loop:
 		// Load headers into the database
 		var inSync bool
 		if inSync, err = cfg.hd.InsertHeaders(headerInserter.NewFeedHeaderFunc(tx, cfg.blockReader), cfg.chainConfig.TerminalTotalDifficulty, logPrefix, logEvery.C); err != nil {
-			return err
+			return ForwardAborted, err
 		}
 
 		if test {
@@ -910,28 +888,26 @@ Loop:
 	if headerInserter.GetHighest() != 0 {
 		if !headerInserter.Unwind() {
 			if err := fixCanonicalChain(logPrefix, logEvery, headerInserter.GetHighest(), headerInserter.GetHighestHash(), tx, cfg.blockReader); err != nil {
-				return fmt.Errorf("fix canonical chain: %w", err)
+				return ForwardAborted, fmt.Errorf("fix canonical chain: %w", err)
 			}
 		}
 		if err = rawdb.WriteHeadHeaderHash(tx, headerInserter.GetHighestHash()); err != nil {
-			return fmt.Errorf("[%s] marking head header hash as %x: %w", logPrefix, headerInserter.GetHighestHash(), err)
+			return ForwardAborted, fmt.Errorf("[%s] marking head header hash as %x: %w", logPrefix, headerInserter.GetHighestHash(), err)
 		}
 		if err = s.Update(tx, headerInserter.GetHighest()); err != nil {
-			return fmt.Errorf("[%s] saving Headers progress: %w", logPrefix, err)
-		}
-	}
-	if !useExternalTx {
-		if err := tx.Commit(); err != nil {
-			return err
+			return ForwardAborted, fmt.Errorf("[%s] saving Headers progress: %w", logPrefix, err)
 		}
 	}
 	if stopped {
-		return libcommon.ErrStopped
+		return ForwardInterrupted, libcommon.ErrStopped
 	}
 	// We do not print the following line if the stage was interrupted
 	log.Info(fmt.Sprintf("[%s] Processed", logPrefix), "highest inserted", headerInserter.GetHighest(), "age", common.PrettyAge(time.Unix(int64(headerInserter.GetHighestTimestamp()), 0)))
 
-	return nil
+	if headerInserter.GetHighest() >= commitThreshold {
+		return ForwardCompletedToCommit, nil
+	}
+	return ForwardCompleted, nil
 }
 
 func fixCanonicalChain(logPrefix string, logEvery *time.Ticker, height uint64, hash common.Hash, tx kv.StatelessRwTx, headerReader services.FullBlockReader) error {

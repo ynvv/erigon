@@ -165,25 +165,12 @@ func New(stagesList []*Stage, unwindOrder UnwindOrder, pruneOrder PruneOrder) *S
 	}
 }
 
-func (s *Sync) StageState(stage stages.SyncStage, tx kv.Tx, db kv.RoDB) (*StageState, error) {
+func (s *Sync) StageState(stage stages.SyncStage, tx kv.Tx) (*StageState, error) {
 	var blockNum uint64
 	var err error
-	useExternalTx := tx != nil
-	if useExternalTx {
-		blockNum, err = stages.GetStageProgress(tx, stage)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		if err = db.View(context.Background(), func(tx kv.Tx) error {
-			blockNum, err = stages.GetStageProgress(tx, stage)
-			if err != nil {
-				return err
-			}
-			return nil
-		}); err != nil {
-			return nil, err
-		}
+	blockNum, err = stages.GetStageProgress(tx, stage)
+	if err != nil {
+		return nil, err
 	}
 
 	return &StageState{s, stage, blockNum}, nil
@@ -211,7 +198,7 @@ func (s *Sync) RunUnwind(db kv.RwDB, tx kv.RwTx) error {
 }
 func (s *Sync) Run(ctx context.Context, db kv.RwDB, tx kv.RwTx, firstCycle bool, quiet bool) (committed bool, err error) {
 	defer func() {
-		if committed && tx != nil {
+		if tx != nil {
 			tx.Rollback()
 		}
 	}()
@@ -268,7 +255,7 @@ func (s *Sync) Run(ctx context.Context, db kv.RwDB, tx kv.RwTx, firstCycle bool,
 		// When a stage cannot be completed within one transaction, it will return ForwardPartial
 		// And it will be called repeatedly until it either completes, or aborts, or gets interrupted
 		for {
-			if result, err = s.runStage(stage, db, tx, firstCycle, badBlockUnwind, quiet); err != nil {
+			if result, err = s.runStage(stage, tx, commitAfterEachStage, firstCycle, badBlockUnwind, quiet); err != nil {
 				return committed, err
 			}
 			if result != ForwardPartial {
@@ -369,14 +356,14 @@ func PrintTables(db kv.RoDB, tx kv.RwTx) []interface{} {
 	return bucketSizes
 }
 
-func (s *Sync) runStage(stage *Stage, db kv.RwDB, tx kv.RwTx, firstCycle bool, badBlockUnwind bool, quiet bool) (result ForwardResult, err error) {
+func (s *Sync) runStage(stage *Stage, tx kv.RwTx, commitAfterEachStage bool, firstCycle bool, badBlockUnwind bool, quiet bool) (result ForwardResult, err error) {
 	start := time.Now()
-	stageState, err := s.StageState(stage.ID, tx, db)
+	stageState, err := s.StageState(stage.ID, tx)
 	if err != nil {
 		return ForwardAborted, err
 	}
 
-	if result, err = stage.Forward(firstCycle, badBlockUnwind, stageState, s, tx, quiet); err != nil {
+	if result, err = stage.Forward(firstCycle, badBlockUnwind, stageState, s, tx, commitAfterEachStage, quiet); err != nil {
 		wrappedError := fmt.Errorf("[%s] %w", s.LogPrefix(), err)
 		log.Debug("Error while executing stage", "err", wrappedError)
 		return ForwardAborted, wrappedError
@@ -393,10 +380,10 @@ func (s *Sync) runStage(stage *Stage, db kv.RwDB, tx kv.RwTx, firstCycle bool, b
 	return
 }
 
-func (s *Sync) unwindStage(firstCycle bool, stage *Stage, db kv.RwDB, tx kv.RwTx) error {
+func (s *Sync) unwindStage(firstCycle bool, stage *Stage, tx kv.RwTx) error {
 	start := time.Now()
 	log.Trace("Unwind...", "stage", stage.ID)
-	stageState, err := s.StageState(stage.ID, tx, db)
+	stageState, err := s.StageState(stage.ID, tx)
 	if err != nil {
 		return err
 	}
@@ -430,7 +417,7 @@ func (s *Sync) pruneStage(firstCycle bool, stage *Stage, db kv.RwDB, tx kv.RwTx)
 	start := time.Now()
 	log.Trace("Prune...", "stage", stage.ID)
 
-	stageState, err := s.StageState(stage.ID, tx, db)
+	stageState, err := s.StageState(stage.ID, tx)
 	if err != nil {
 		return err
 	}

@@ -36,15 +36,7 @@ func StageBlockHashesCfg(db kv.RwDB, tmpDir string, cc *params.ChainConfig) Bloc
 	}
 }
 
-func SpawnBlockHashStage(s *StageState, tx kv.RwTx, cfg BlockHashesCfg, ctx context.Context) (err error) {
-	useExternalTx := tx != nil
-	if !useExternalTx {
-		tx, err = cfg.db.BeginRw(ctx)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-	}
+func SpawnBlockHashStage(s *StageState, tx kv.RwTx, cfg BlockHashesCfg, ctx context.Context) error {
 	quit := ctx.Done()
 	headNumber, err := stages.GetStageProgress(tx, stages.Headers)
 	if err != nil {
@@ -78,11 +70,6 @@ func SpawnBlockHashStage(s *StageState, tx kv.RwTx, cfg BlockHashesCfg, ctx cont
 	}
 	if err = s.Update(tx, headNumber); err != nil {
 		return err
-	}
-	if !useExternalTx {
-		if err = tx.Commit(); err != nil {
-			return err
-		}
 	}
 	return nil
 }

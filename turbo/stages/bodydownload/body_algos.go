@@ -104,7 +104,7 @@ func (bd *BodyDownload) RequestMoreBodies(tx kv.RwTx, blockReader services.FullB
 		var err error
 		key := dbutils.EncodeBlockNumber(blockNum)
 		var bodyInBucket bool
-		if !bd.UsingExternalTx {
+		if bd.CommitAfterEachStage {
 			bodyInBucket, err = tx.Has("BodiesStage", key)
 			if err != nil {
 				return nil, blockNum, err
@@ -426,7 +426,7 @@ func (bd *BodyDownload) GetHeader(blockNum uint64, blockReader services.FullBloc
 }
 
 func (bd *BodyDownload) addBodyToBucket(tx kv.RwTx, key uint64, body *types.RawBody) error {
-	if !bd.UsingExternalTx {
+	if bd.CommitAfterEachStage {
 		// use the kv store to hold onto bodies as we're anticipating a lot of memory usage
 		writer := bytes.NewBuffer(nil)
 		err := body.EncodeRLP(writer)
@@ -452,7 +452,7 @@ func (bd *BodyDownload) addBodyToBucket(tx kv.RwTx, key uint64, body *types.RawB
 }
 
 func (bd *BodyDownload) GetBlockFromCache(tx kv.RwTx, blockNum uint64) (*types.RawBody, error) {
-	if !bd.UsingExternalTx {
+	if bd.CommitAfterEachStage {
 		key := dbutils.EncodeBlockNumber(blockNum)
 		body, err := tx.GetOne("BodiesStage", key)
 		if err != nil {

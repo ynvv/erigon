@@ -28,16 +28,6 @@ func StageCumulativeIndexCfg(db kv.RwDB) CumulativeIndexCfg {
 }
 
 func SpawnStageCumulativeIndex(cfg CumulativeIndexCfg, s *StageState, tx kv.RwTx, ctx context.Context) error {
-	useExternalTx := tx != nil
-
-	if !useExternalTx {
-		var err error
-		tx, err = cfg.db.BeginRw(context.Background())
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-	}
 	// Log timer
 	logEvery := time.NewTicker(logInterval)
 	defer logEvery.Stop()
@@ -111,11 +101,6 @@ func SpawnStageCumulativeIndex(cfg CumulativeIndexCfg, s *StageState, tx kv.RwTx
 	}
 	if err = s.Update(tx, currentBlockNumber); err != nil {
 		return err
-	}
-	if !useExternalTx {
-		if err = tx.Commit(); err != nil {
-			return err
-		}
 	}
 	return nil
 }

@@ -22,25 +22,25 @@ type Delivery struct {
 
 // BodyDownload represents the state of body downloading process
 type BodyDownload struct {
-	peerMap          map[[64]byte]int
-	requestedMap     map[DoubleHash]uint64
-	DeliveryNotify   chan struct{}
-	deliveryCh       chan Delivery
-	Engine           consensus.Engine
-	delivered        *roaring64.Bitmap
-	prefetchedBlocks *PrefetchedBlocks
-	deliveriesH      map[uint64]*types.Header
-	requests         map[uint64]*BodyRequest
-	maxProgress      uint64
-	requestedLow     uint64 // Lower bound of block number for outstanding requests
-	requestHigh      uint64
-	lowWaitUntil     uint64 // Time to wait for before starting the next round request from requestedLow
-	outstandingLimit uint64 // Limit of number of outstanding blocks for body requests
-	deliveredCount   float64
-	wastedCount      float64
-	bodiesAdded      bool
-	bodyCache        map[uint64]*types.RawBody
-	UsingExternalTx  bool
+	peerMap              map[[64]byte]int
+	requestedMap         map[DoubleHash]uint64
+	DeliveryNotify       chan struct{}
+	deliveryCh           chan Delivery
+	Engine               consensus.Engine
+	delivered            *roaring64.Bitmap
+	prefetchedBlocks     *PrefetchedBlocks
+	deliveriesH          map[uint64]*types.Header
+	requests             map[uint64]*BodyRequest
+	maxProgress          uint64
+	requestedLow         uint64 // Lower bound of block number for outstanding requests
+	requestHigh          uint64
+	lowWaitUntil         uint64 // Time to wait for before starting the next round request from requestedLow
+	outstandingLimit     uint64 // Limit of number of outstanding blocks for body requests
+	deliveredCount       float64
+	wastedCount          float64
+	bodiesAdded          bool
+	bodyCache            map[uint64]*types.RawBody
+	CommitAfterEachStage bool
 }
 
 // BodyRequest is a sketch of the request for block bodies, meaning that access to the database is required to convert it to the actual BlockBodies request (look up hashes of canonical blocks)

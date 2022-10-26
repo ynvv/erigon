@@ -13,14 +13,6 @@ import (
 
 func SpawnVerkleTrie(s *StageState, u Unwinder, tx kv.RwTx, cfg TrieCfg, ctx context.Context) (common.Hash, error) {
 	var err error
-	useExternalTx := tx != nil
-	if !useExternalTx {
-		tx, err = cfg.db.BeginRw(ctx)
-		if err != nil {
-			return common.Hash{}, err
-		}
-		defer tx.Rollback()
-	}
 	from := uint64(0)
 	if s.BlockNumber > 0 {
 		from = s.BlockNumber + 1
@@ -48,9 +40,6 @@ func SpawnVerkleTrie(s *StageState, u Unwinder, tx kv.RwTx, cfg TrieCfg, ctx con
 	}
 	if err := stages.SaveStageProgress(tx, stages.VerkleTrie, to); err != nil {
 		return common.Hash{}, err
-	}
-	if !useExternalTx {
-		return newRoot, tx.Commit()
 	}
 	return newRoot, nil
 }

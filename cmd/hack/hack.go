@@ -1292,6 +1292,44 @@ func iterate(filename string, prefix string) error {
 	return nil
 }
 
+func checkIndex(filename string) error {
+	segName := filename + ".seg"
+	idxName := filename + ".idx"
+	segDecomp, err := compress.NewDecompressor(segName)
+	if err != nil {
+		return err
+	}
+	defer segDecomp.Close()
+	viIndex, err := recsplit.OpenIndex(idxName)
+	if err != nil {
+		return err
+	}
+	defer viIndex.Close()
+	r := recsplit.NewIndexReader(viIndex)
+	g := segDecomp.MakeGetter()
+	var val []byte
+	var pos uint64
+	var nextPos uint64
+	hasher := crypto.NewKeccakState()
+	var h common.Hash
+	correct := 0
+	for g.HasNext() {
+		val, nextPos = g.Next(val[:0])
+		hasher.Reset()
+		hasher.Write(val[1:])
+		hasher.Read(h[:])
+		localID := r.Lookup(h[:])
+		idxPos := viIndex.OrdinalLookup(localID)
+		if pos != idxPos {
+			fmt.Printf("localID=%d, key [%x], pos=%d, idxPos=%d, pos-idxPos=%d, correct so far=%d\n", localID, h, pos, idxPos, pos-idxPos, correct)
+		} else {
+			correct++
+		}
+		pos = nextPos
+	}
+	return nil
+}
+
 func main() {
 	debug.RaiseFdLimit()
 	flag.Parse()
@@ -1416,6 +1454,8 @@ func main() {
 		err = findLogs(*chaindata, uint64(*block), uint64(*blockTotal))
 	case "iterate":
 		err = iterate(*chaindata, *account)
+	case "checkIndex":
+		err = checkIndex(*chaindata)
 	}
 
 	if err != nil {

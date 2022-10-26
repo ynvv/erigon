@@ -44,16 +44,6 @@ func StageCallTracesCfg(
 }
 
 func SpawnCallTraces(s *StageState, tx kv.RwTx, cfg CallTracesCfg, ctx context.Context) error {
-	useExternalTx := tx != nil
-	if !useExternalTx {
-		var err error
-		tx, err = cfg.db.BeginRw(ctx)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-	}
-
 	quit := ctx.Done()
 	endBlock, err := s.ExecutionAt(tx)
 	if cfg.ToBlock > 0 && cfg.ToBlock < endBlock {
@@ -73,11 +63,6 @@ func SpawnCallTraces(s *StageState, tx kv.RwTx, cfg CallTracesCfg, ctx context.C
 
 	if err := s.Update(tx, endBlock); err != nil {
 		return err
-	}
-	if !useExternalTx {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
 	}
 
 	return nil

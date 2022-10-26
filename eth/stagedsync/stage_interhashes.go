@@ -56,15 +56,6 @@ func StageTrieCfg(db kv.RwDB, checkRoot, saveNewHashesToDB, badBlockHalt bool, t
 
 func SpawnIntermediateHashesStage(s *StageState, u Unwinder, tx kv.RwTx, cfg TrieCfg, ctx context.Context, quiet bool) (common.Hash, error) {
 	quit := ctx.Done()
-	useExternalTx := tx != nil
-	if !useExternalTx {
-		var err error
-		tx, err = cfg.db.BeginRw(context.Background())
-		if err != nil {
-			return trie.EmptyRoot, err
-		}
-		defer tx.Rollback()
-	}
 
 	to, err := s.ExecutionAt(tx)
 	if err != nil {
@@ -122,12 +113,6 @@ func SpawnIntermediateHashesStage(s *StageState, u Unwinder, tx kv.RwTx, cfg Tri
 		}
 	} else if err = s.Update(tx, to); err != nil {
 		return trie.EmptyRoot, err
-	}
-
-	if !useExternalTx {
-		if err := tx.Commit(); err != nil {
-			return trie.EmptyRoot, err
-		}
 	}
 
 	return root, err

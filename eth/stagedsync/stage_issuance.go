@@ -39,28 +39,12 @@ func StageIssuanceCfg(db kv.RwDB, chainConfig *params.ChainConfig, blockReader s
 }
 
 func SpawnStageIssuance(cfg IssuanceCfg, s *StageState, tx kv.RwTx, ctx context.Context) error {
-	useExternalTx := tx != nil
-
-	if !useExternalTx {
-		var err error
-		tx, err = cfg.db.BeginRw(context.Background())
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-	}
-
 	headNumber, err := stages.GetStageProgress(tx, stages.Bodies)
 	if err != nil {
 		return fmt.Errorf("getting headers progress: %w", err)
 	}
 
 	if cfg.chainConfig.Consensus != params.EtHashConsensus || !cfg.enabledIssuance || headNumber == s.BlockNumber {
-		if !useExternalTx {
-			if err = tx.Commit(); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 
@@ -169,11 +153,6 @@ func SpawnStageIssuance(cfg IssuanceCfg, s *StageState, tx kv.RwTx, ctx context.
 	}
 	if err = s.Update(tx, currentBlockNumber); err != nil {
 		return err
-	}
-	if !useExternalTx {
-		if err = tx.Commit(); err != nil {
-			return err
-		}
 	}
 	return nil
 }
