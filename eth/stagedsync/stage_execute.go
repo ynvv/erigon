@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
 	"runtime"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/ledgerwatch/erigon-lib/etl"
 	"github.com/ledgerwatch/erigon-lib/kv"
 	libstate "github.com/ledgerwatch/erigon-lib/state"
+	"github.com/ledgerwatch/erigon/eth/ethconfig/estimate"
 	"github.com/ledgerwatch/log/v3"
 
 	commonold "github.com/ledgerwatch/erigon/common"
@@ -45,6 +45,9 @@ import (
 
 const (
 	logInterval = 20 * time.Second
+
+	// stateStreamLimit - don't accumulate state changes if jump is bigger than this amount of blocks
+	stateStreamLimit uint64 = 1_000
 )
 
 type HasChangeSetWriter interface {
@@ -129,10 +132,11 @@ func executeBlock(
 	writeReceipts bool,
 	writeCallTraces bool,
 	initialCycle bool,
+	stateStream bool,
 	effectiveEngine consensus.Engine,
 ) error {
 	blockNum := block.NumberU64()
-	stateReader, stateWriter, err := newStateReaderWriter(batch, tx, block, writeChangesets, cfg.accumulator, initialCycle, cfg.stateStream)
+	stateReader, stateWriter, err := newStateReaderWriter(batch, tx, block, writeChangesets, cfg.accumulator, initialCycle, stateStream)
 	if err != nil {
 		return err
 	}
@@ -244,8 +248,9 @@ func ExecBlock22(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint64, ctx cont
 		}
 
 		if found && reconstituteToBlock > s.BlockNumber+1 {
+			reconWorkers := estimate.ReconstituteState.Workers()
 			log.Info(fmt.Sprintf("[%s] Blocks execution, reconstitution", s.LogPrefix()), "from", s.BlockNumber, "to", reconstituteToBlock)
-			if err := ReconstituteState(ctx, s, cfg.dirs, workersCount, cfg.batchSize, cfg.db, cfg.blockReader, log.New(), cfg.agg, cfg.engine, cfg.chainConfig, cfg.genesis); err != nil {
+			if err := ReconstituteState(ctx, s, cfg.dirs, reconWorkers, cfg.batchSize, cfg.db, cfg.blockReader, log.New(), cfg.agg, cfg.engine, cfg.chainConfig, cfg.genesis); err != nil {
 				return err
 			}
 		}
@@ -371,8 +376,7 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 	if !quiet && to > s.BlockNumber+16 {
 		log.Info(fmt.Sprintf("[%s] Blocks execution", logPrefix), "from", s.BlockNumber, "to", to)
 	}
-
-	startTime := time.Now()
+	stateStream := !initialCycle && cfg.stateStream && to-s.BlockNumber < stateStreamLimit
 
 	// changes are stored through memory buffer
 	logEvery := time.NewTicker(logInterval)
@@ -386,15 +390,6 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 	// Transform batch_size limit into Ggas
 	gasState := uint64(cfg.batchSize) * uint64(datasize.KB) * 2
 
-	startGasUsed, err := rawdb.ReadCumulativeGasUsed(tx, s.BlockNumber)
-	if err != nil {
-		return err
-	}
-
-	totalGasUsed, err := rawdb.ReadCumulativeGasUsed(tx, to)
-	if err != nil {
-		return err
-	}
 	var stoppedErr error
 
 	effectiveEngine := cfg.engine
@@ -436,7 +431,7 @@ Loop:
 		writeChangeSets := nextStagesExpectData || blockNum > cfg.prune.History.PruneTo(to)
 		writeReceipts := nextStagesExpectData || blockNum > cfg.prune.Receipts.PruneTo(to)
 		writeCallTraces := nextStagesExpectData || blockNum > cfg.prune.CallTraces.PruneTo(to)
-		if err = executeBlock(block, tx, batch, cfg, *cfg.vmConfig, writeChangeSets, writeReceipts, writeCallTraces, initialCycle, effectiveEngine); err != nil {
+		if err = executeBlock(block, tx, batch, cfg, *cfg.vmConfig, writeChangeSets, writeReceipts, writeCallTraces, initialCycle, stateStream, effectiveEngine); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				log.Warn(fmt.Sprintf("[%s] Execution failed", logPrefix), "block", blockNum, "hash", block.Hash().String(), "err", err)
 				if cfg.hd != nil {
@@ -480,18 +475,7 @@ Loop:
 		select {
 		default:
 		case <-logEvery.C:
-			cumulativeGas, err := rawdb.ReadCumulativeGasUsed(tx, blockNum)
-			if err != nil {
-				return err
-			}
-			totalGasTmp := new(big.Int).Set(totalGasUsed)
-			elapsed := time.Since(startTime)
-			estimateRatio := float64(cumulativeGas.Sub(cumulativeGas, startGasUsed).Uint64()) / float64(totalGasTmp.Sub(totalGasTmp, startGasUsed).Uint64())
-			var estimatedTime commonold.PrettyDuration
-			if estimateRatio != 0 {
-				estimatedTime = commonold.PrettyDuration((elapsed.Seconds() / estimateRatio) * float64(time.Second))
-			}
-			logBlock, logTx, logTime = logProgress(logPrefix, logBlock, logTime, blockNum, logTx, lastLogTx, gas, float64(currentStateGas)/float64(gasState), estimatedTime, batch)
+			logBlock, logTx, logTime = logProgress(logPrefix, logBlock, logTime, blockNum, logTx, lastLogTx, gas, float64(currentStateGas)/float64(gasState), batch)
 			gas = 0
 			tx.CollectMetrics()
 			syncMetrics[stages.Execution].Set(blockNum)
@@ -517,7 +501,7 @@ Loop:
 	return stoppedErr
 }
 
-func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, currentBlock uint64, prevTx, currentTx uint64, gas uint64, gasState float64, estimatedTime commonold.PrettyDuration, batch ethdb.DbWithPendingMutations) (uint64, uint64, time.Time) {
+func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, currentBlock uint64, prevTx, currentTx uint64, gas uint64, gasState float64, batch ethdb.DbWithPendingMutations) (uint64, uint64, time.Time) {
 	currentTime := time.Now()
 	interval := currentTime.Sub(prevTime)
 	speed := float64(currentBlock-prevBlock) / (float64(interval) / float64(time.Second))
@@ -532,9 +516,6 @@ func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, current
 		"tx/s", fmt.Sprintf("%.1f", speedTx),
 		"Mgas/s", fmt.Sprintf("%.1f", speedMgas),
 		"gasState", fmt.Sprintf("%.2f", gasState),
-	}
-	if estimatedTime > 0 {
-		logpairs = append(logpairs, "estimated duration", estimatedTime)
 	}
 	if batch != nil {
 		logpairs = append(logpairs, "batch", common.ByteCount(uint64(batch.BatchSize())))
@@ -581,7 +562,7 @@ func unwindExecutionStage(u *UnwindState, s *StageState, tx kv.RwTx, ctx context
 	storageKeyLength := length.Addr + length.Incarnation + length.Hash
 
 	var accumulator *shards.Accumulator
-	if !initialCycle && cfg.stateStream {
+	if !initialCycle && cfg.stateStream && s.BlockNumber-u.UnwindPoint < stateStreamLimit {
 		accumulator = cfg.accumulator
 
 		hash, err := rawdb.ReadCanonicalHash(tx, u.UnwindPoint)

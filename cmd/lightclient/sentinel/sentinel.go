@@ -32,6 +32,7 @@ import (
 	"github.com/ledgerwatch/log/v3"
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pubsub_pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	"github.com/pkg/errors"
@@ -44,7 +45,7 @@ type Sentinel struct {
 	host       host.Host
 	cfg        *SentinelConfig
 	peers      *peers.Peers
-	metadataV1 *cltypes.MetadataV2
+	MetadataV2 *cltypes.MetadataV2
 
 	discoverConfig discover.Config
 	pubsub         *pubsub.PubSub
@@ -121,14 +122,14 @@ func (s *Sentinel) createListener() (*discover.UDPv5, error) {
 	}
 
 	// TODO: Set up proper attestation number
-	s.metadataV1 = &cltypes.MetadataV2{
+	s.MetadataV2 = &cltypes.MetadataV2{
 		SeqNumber: localNode.Seq(),
 		Attnets:   0,
 		Syncnets:  0,
 	}
 
 	// Start stream handlers
-	handlers.NewConsensusHandlers(s.host, s.peers, s.metadataV1).Start()
+	handlers.NewConsensusHandlers(s.host, s.peers, s.MetadataV2).Start()
 
 	net, err := discover.ListenV5(s.ctx, conn, localNode, discCfg)
 	if err != nil {
@@ -142,8 +143,10 @@ func (s *Sentinel) pubsubOptions() []pubsub.Option {
 	gsp := pubsub.DefaultGossipSubParams()
 	psOpts := []pubsub.Option{
 		pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
-		pubsub.WithMessageIdFn(fork.MsgID),
-		pubsub.WithNoAuthor(),
+		pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
+		pubsub.WithMessageIdFn(func(pmsg *pubsub_pb.Message) string {
+			return fork.MsgID(pmsg, s.cfg.NetworkConfig, s.cfg.BeaconConfig, s.cfg.GenesisConfig)
+		}), pubsub.WithNoAuthor(),
 		pubsub.WithSubscriptionFilter(nil),
 		pubsub.WithPeerOutboundQueueSize(pubsubQueueSize),
 		pubsub.WithMaxMessageSize(int(s.cfg.NetworkConfig.GossipMaxSize)),
@@ -222,7 +225,10 @@ func (s *Sentinel) Start(
 	if err := s.connectToBootnodes(); err != nil {
 		return fmt.Errorf("failed to connect to bootnodes err=%w", err)
 	}
-	go s.listenForPeers()
+
+	if !s.cfg.NoDiscovery {
+		go s.listenForPeers()
+	}
 	s.subManager = NewGossipManager(s.ctx)
 	return nil
 }
