@@ -293,8 +293,8 @@ github.com/fsnotify/fsnotify v1.5.4 h1:jRbGcIw6P2Meqdwuo0H1p6JVLbL5DHKAKlYndzMwV
 github.com/fsnotify/fsnotify v1.5.4/go.mod h1:OVB6XrOHzAwXMpEM7uPOzcehqUV2UqJxmVXmkdnm1bU=
 github.com/garslo/gogen v0.0.0-20170307003452-d6ebae628c7c h1:uYNKzPntb8c6DKvP9EfrBjkLkU7pM4lM+uuHSIa8UtU=
 github.com/garslo/gogen v0.0.0-20170307003452-d6ebae628c7c/go.mod h1:Q0X6pkwTILDlzrGEckF6HKjXe48EgsY/l7K7vhY4MW8=
-github.com/gballet/go-verkle v0.0.0-20220829125900-a702d458d33c h1:zN3+0FLRcsoX/lVcgGC0EBtNcBvCXJWgMDmTbEz8pnw=
-github.com/gballet/go-verkle v0.0.0-20220829125900-a702d458d33c/go.mod h1:o/XfIXWi4/GqbQirfRm5uTbXMG5NpqxkxblnbZ+QM9I=
+github.com/gballet/go-verkle v0.0.0-20221027172457-14724edc4b22 h1:9JpSgxBKA7WwwJWV51Sd8rHkEi59K7tD7vfqyGH/R5U=
+github.com/gballet/go-verkle v0.0.0-20221027172457-14724edc4b22/go.mod h1:A3FwOP19ARP2LMaO9gN/KrkiDTbmBOvCHlUy15YIXx0=
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
 github.com/gliderlabs/ssh v0.1.1/go.mod h1:U7qILu1NlMHj9FlMhZLlkCdDnU1DBEAqr0aevW3Awn0=
 github.com/glycerine/go-unsnap-stream v0.0.0-20180323001048-9f0cb55181dd/go.mod h1:/20jfyN9Y5QPEAprSgKAUr+glWDY39ZiUEAYOEv5dsE=

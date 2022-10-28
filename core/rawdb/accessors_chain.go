@@ -1850,7 +1850,7 @@ func WriteVerkleNode(tx kv.RwTx, node verkle.VerkleNode) error {
 		encoded []byte
 		err     error
 	)
-	root = node.ComputeCommitment().Bytes()
+	root = node.Commit().Bytes()
 	encoded, err = node.Serialize()
 	if err != nil {
 		return err

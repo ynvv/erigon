@@ -32,7 +32,7 @@ require (
 	github.com/emirpasic/gods v1.18.1
 	github.com/ferranbt/fastssz v0.1.2
 	github.com/fjl/gencodec v0.0.0-20220412091415-8bb9e558978c
-	github.com/gballet/go-verkle v0.0.0-20220829125900-a702d458d33c
+	github.com/gballet/go-verkle v0.0.0-20221027172457-14724edc4b22
 	github.com/goccy/go-json v0.9.7
 	github.com/gofrs/flock v0.8.1
 	github.com/golang-jwt/jwt/v4 v4.4.2
