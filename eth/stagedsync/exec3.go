@@ -94,7 +94,7 @@ func Exec3(ctx context.Context,
 	logger log.Logger, agg *state2.Aggregator22, engine consensus.Engine,
 	maxBlockNum uint64, chainConfig *params.ChainConfig,
 	genesis *core.Genesis,
-) (err error) {
+) (ForwardResult, error) {
 	parallel := workerCount > 1
 	useExternalTx := applyTx != nil
 	if !useExternalTx && !parallel {
@@ -521,7 +521,7 @@ func processResultQueue(rws *state.TxTaskQueue, outputTxNum *atomic2.Uint64, rs 
 	}
 }
 
-func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, workerCount int, batchSize datasize.ByteSize, chainDb kv.RwDB,
+func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, workerCount int, batchSize datasize.ByteSize, tx kv.RwTx, chainDb kv.RoDB,
 	blockReader services.FullBlockReader,
 	logger log.Logger, agg *state2.Aggregator22, engine consensus.Engine,
 	chainConfig *params.ChainConfig, genesis *core.Genesis) (err error) {
@@ -1040,35 +1040,30 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 		}
 		plainContractCollectors[i].Close()
 	}
-	if err = chainDb.Update(ctx, func(tx kv.RwTx) error {
-		if err = tx.ClearBucket(kv.PlainState); err != nil {
-			return err
-		}
-		if err = tx.ClearBucket(kv.Code); err != nil {
-			return err
-		}
-		if err = tx.ClearBucket(kv.PlainContractCode); err != nil {
-			return err
-		}
-		if err = plainStateCollector.Load(tx, kv.PlainState, etl.IdentityLoadFunc, etl.TransformArgs{}); err != nil {
-			return err
-		}
-		plainStateCollector.Close()
-		if err = codeCollector.Load(tx, kv.Code, etl.IdentityLoadFunc, etl.TransformArgs{}); err != nil {
-			return err
-		}
-		codeCollector.Close()
-		if err = plainContractCollector.Load(tx, kv.PlainContractCode, etl.IdentityLoadFunc, etl.TransformArgs{}); err != nil {
-			return err
-		}
-		plainContractCollector.Close()
-		if err := s.Update(tx, blockNum); err != nil {
-			return err
-		}
-		s.BlockNumber = blockNum
-		return nil
-	}); err != nil {
+	if err = tx.ClearBucket(kv.PlainState); err != nil {
 		return err
 	}
+	if err = tx.ClearBucket(kv.Code); err != nil {
+		return err
+	}
+	if err = tx.ClearBucket(kv.PlainContractCode); err != nil {
+		return err
+	}
+	if err = plainStateCollector.Load(tx, kv.PlainState, etl.IdentityLoadFunc, etl.TransformArgs{}); err != nil {
+		return err
+	}
+	plainStateCollector.Close()
+	if err = codeCollector.Load(tx, kv.Code, etl.IdentityLoadFunc, etl.TransformArgs{}); err != nil {
+		return err
+	}
+	codeCollector.Close()
+	if err = plainContractCollector.Load(tx, kv.PlainContractCode, etl.IdentityLoadFunc, etl.TransformArgs{}); err != nil {
+		return err
+	}
+	plainContractCollector.Close()
+	if err := s.Update(tx, blockNum); err != nil {
+		return err
+	}
+	s.BlockNumber = blockNum
 	return nil
 }

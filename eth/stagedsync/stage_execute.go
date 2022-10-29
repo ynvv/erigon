@@ -233,7 +233,7 @@ func newStateReaderWriter(
 
 // ================ Erigon3 ================
 
-func ExecBlock22(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint64, ctx context.Context, cfg ExecuteBlockCfg, initialCycle bool) (err error) {
+func ExecBlock22(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint64, ctx context.Context, cfg ExecuteBlockCfg, initialCycle bool) (ForwardResult, error) {
 	workersCount := cfg.workersCount
 	//workersCount := 2
 	if !initialCycle {
@@ -244,21 +244,23 @@ func ExecBlock22(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint64, ctx cont
 	if initialCycle && s.BlockNumber == 0 {
 		reconstituteToBlock, found, err := reconstituteBlock(cfg.agg, cfg.db, tx)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 
 		if found && reconstituteToBlock > s.BlockNumber+1 {
 			reconWorkers := estimate.ReconstituteState.Workers()
 			log.Info(fmt.Sprintf("[%s] Blocks execution, reconstitution", s.LogPrefix()), "from", s.BlockNumber, "to", reconstituteToBlock)
-			if err := ReconstituteState(ctx, s, cfg.dirs, reconWorkers, cfg.batchSize, cfg.db, cfg.blockReader, log.New(), cfg.agg, cfg.engine, cfg.chainConfig, cfg.genesis); err != nil {
-				return err
+			if err := ReconstituteState(ctx, s, cfg.dirs, reconWorkers, cfg.batchSize, tx, cfg.db, cfg.blockReader, log.New(), cfg.agg, cfg.engine, cfg.chainConfig, cfg.genesis); err != nil {
+				return ForwardAborted, err
+			} else {
+				return ForwardPartial, nil
 			}
 		}
 	}
 
 	prevStageProgress, err := senderStageProgress(tx, cfg.db)
 	if err != nil {
-		return err
+		return ForwardAborted, err
 	}
 
 	logPrefix := s.LogPrefix()
@@ -267,20 +269,16 @@ func ExecBlock22(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint64, ctx cont
 		to = cmp.Min(prevStageProgress, toBlock)
 	}
 	if to <= s.BlockNumber {
-		return nil
+		return ForwardCompleted, nil
 	}
 	if to > s.BlockNumber+16 {
 		log.Info(fmt.Sprintf("[%s] Blocks execution", logPrefix), "from", s.BlockNumber, "to", to)
 	}
 	rs := state.NewState22()
-	if err := Exec3(ctx, s, workersCount, cfg.batchSize, cfg.db, tx, rs,
+	return Exec3(ctx, s, workersCount, cfg.batchSize, cfg.db, tx, rs,
 		cfg.blockReader, log.New(), cfg.agg, cfg.engine,
 		to,
-		cfg.chainConfig, cfg.genesis); err != nil {
-		return err
-	}
-
-	return nil
+		cfg.chainConfig, cfg.genesis)
 }
 
 // reconstituteBlock - First block which is not covered by the history snapshot files
@@ -355,13 +353,13 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 
 	quit := ctx.Done()
 
-	prevStageProgress, errStart := stages.GetStageProgress(tx, stages.Senders)
-	if errStart != nil {
-		return errStart
+	prevStageProgress, err := stages.GetStageProgress(tx, stages.Senders)
+	if err != nil {
+		return ForwardAborted, err
 	}
 	nextStageProgress, err := stages.GetStageProgress(tx, stages.HashState)
 	if err != nil {
-		return err
+		return ForwardAborted, err
 	}
 	nextStagesExpectData := nextStageProgress > 0 // Incremental move of next stages depend on fully written ChangeSets, Receipts, CallTraceSet
 
@@ -371,7 +369,7 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		to = cmp.Min(prevStageProgress, toBlock)
 	}
 	if to <= s.BlockNumber {
-		return nil
+		return ForwardCompleted, nil
 	}
 	if !quiet && to > s.BlockNumber+16 {
 		log.Info(fmt.Sprintf("[%s] Blocks execution", logPrefix), "from", s.BlockNumber, "to", to)
@@ -385,10 +383,7 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 	logBlock := stageProgress
 	logTx, lastLogTx := uint64(0), uint64(0)
 	logTime := time.Now()
-	var gas uint64             // used for logs
-	var currentStateGas uint64 // used for batch commits of state
-	// Transform batch_size limit into Ggas
-	gasState := uint64(cfg.batchSize) * uint64(datasize.KB) * 2
+	var gas uint64 // used for logs
 
 	var stoppedErr error
 
@@ -406,6 +401,7 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, tx kv.RwTx, toBlock uint
 		batch.Rollback()
 	}()
 
+	var result ForwardResult = ForwardCompleted
 Loop:
 	for blockNum := stageProgress + 1; blockNum <= to; blockNum++ {
 		if stoppedErr = common.Stopped(quit); stoppedErr != nil {
@@ -414,11 +410,11 @@ Loop:
 
 		blockHash, err := rawdb.ReadCanonicalHash(tx, blockNum)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 		block, _, err := cfg.blockReader.BlockWithSenders(ctx, tx, blockHash, blockNum)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 		if block == nil {
 			log.Error(fmt.Sprintf("[%s] Empty block", logPrefix), "blocknum", blockNum)
@@ -438,7 +434,7 @@ Loop:
 					cfg.hd.ReportBadHeaderPoS(blockHash, block.ParentHash())
 				}
 				if cfg.badBlockHalt {
-					return err
+					return ForwardAborted, err
 				}
 			}
 			u.UnwindTo(blockNum-1, block.Hash())
@@ -448,60 +444,41 @@ Loop:
 
 		shouldUpdateProgress := batch.BatchSize() >= int(cfg.batchSize)
 		if shouldUpdateProgress {
-			log.Info("Committed State", "gas reached", currentStateGas, "gasTarget", gasState)
-			currentStateGas = 0
+			log.Info("Committing State")
 			if err = batch.Commit(); err != nil {
-				return err
+				return ForwardAborted, err
 			}
-			if !useExternalTx {
-				if err = s.Update(tx, stageProgress); err != nil {
-					return err
-				}
-				if err = tx.Commit(); err != nil {
-					return err
-				}
-				tx, err = cfg.db.BeginRw(context.Background())
-				if err != nil {
-					return err
-				}
-				// TODO: This creates stacked up deferrals
-				defer tx.Rollback()
-			}
-			batch = olddb.NewHashBatch(tx, quit, cfg.dirs.Tmp)
+			result = ForwardPartial
+			break Loop
 		}
 
-		gas = gas + block.GasUsed()
-		currentStateGas = currentStateGas + block.GasUsed()
+		gas += block.GasUsed()
 		select {
 		default:
 		case <-logEvery.C:
-			logBlock, logTx, logTime = logProgress(logPrefix, logBlock, logTime, blockNum, logTx, lastLogTx, gas, float64(currentStateGas)/float64(gasState), batch)
+			logBlock, logTx, logTime = logProgress(logPrefix, logBlock, logTime, blockNum, logTx, lastLogTx, gas, batch)
 			gas = 0
 			tx.CollectMetrics()
 			syncMetrics[stages.Execution].Set(blockNum)
 		}
 	}
 
-	if err = s.Update(batch, stageProgress); err != nil {
-		return err
-	}
-	if err = batch.Commit(); err != nil {
-		return fmt.Errorf("batch commit: %w", err)
-	}
-
-	if !useExternalTx {
-		if err = tx.Commit(); err != nil {
-			return err
+	if result == ForwardCompleted {
+		if err = s.Update(batch, stageProgress); err != nil {
+			return ForwardAborted, err
+		}
+		if err = batch.Commit(); err != nil {
+			return ForwardAborted, fmt.Errorf("batch commit: %w", err)
 		}
 	}
 
-	if !quiet {
+	if !quiet && result == ForwardCompleted {
 		log.Info(fmt.Sprintf("[%s] Completed on", logPrefix), "block", stageProgress)
 	}
-	return stoppedErr
+	return result, stoppedErr
 }
 
-func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, currentBlock uint64, prevTx, currentTx uint64, gas uint64, gasState float64, batch ethdb.DbWithPendingMutations) (uint64, uint64, time.Time) {
+func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, currentBlock uint64, prevTx, currentTx uint64, gas uint64, batch ethdb.DbWithPendingMutations) (uint64, uint64, time.Time) {
 	currentTime := time.Now()
 	interval := currentTime.Sub(prevTime)
 	speed := float64(currentBlock-prevBlock) / (float64(interval) / float64(time.Second))
@@ -515,7 +492,6 @@ func logProgress(logPrefix string, prevBlock uint64, prevTime time.Time, current
 		"blk/s", fmt.Sprintf("%.1f", speed),
 		"tx/s", fmt.Sprintf("%.1f", speedTx),
 		"Mgas/s", fmt.Sprintf("%.1f", speedMgas),
-		"gasState", fmt.Sprintf("%.2f", gasState),
 	}
 	if batch != nil {
 		logpairs = append(logpairs, "batch", common.ByteCount(uint64(batch.BatchSize())))
