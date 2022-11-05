@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/VictoriaMetrics/metrics"
 	"github.com/c2h5oh/datasize"
 	"github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/common/dir"
@@ -38,6 +39,8 @@ import (
 	atomic2 "go.uber.org/atomic"
 )
 
+var ExecStepsInDB = metrics.NewCounter(`exec_steps_in_db`) //nolint
+
 func NewProgress(prevOutputBlockNum, commitThreshold uint64) *Progress {
 	return &Progress{prevTime: time.Now(), prevOutputBlockNum: prevOutputBlockNum, commitThreshold: commitThreshold}
 }
@@ -50,7 +53,8 @@ type Progress struct {
 	commitThreshold    uint64
 }
 
-func (p *Progress) Log(logPrefix string, rs *state.State22, rwsLen int, queueSize, count, inputBlockNum, outputBlockNum, repeatCount uint64, resultsSize uint64, resultCh chan *state.TxTask, idxStepsAmountInDB float64) {
+func (p *Progress) Log(logPrefix string, rs *state.State22, rwsLen int, queueSize, count, inputBlockNum, outputBlockNum, outTxNum, repeatCount uint64, resultsSize uint64, resultCh chan *state.TxTask, idxStepsAmountInDB float64) {
+	ExecStepsInDB.Set(uint64(idxStepsAmountInDB * 100))
 	var m runtime.MemStats
 	common.ReadMemStats(&m)
 	sizeEstimate := rs.SizeEstimate()
@@ -64,8 +68,8 @@ func (p *Progress) Log(logPrefix string, rs *state.State22, rwsLen int, queueSiz
 	}
 	log.Info(fmt.Sprintf("[%s] Transaction replay", logPrefix),
 		//"workers", workerCount,
-		"at blk", outputBlockNum,
-		"input blk", atomic.LoadUint64(&inputBlockNum),
+		"blk", outputBlockNum, "step", fmt.Sprintf("%.1f", float64(outTxNum)/float64(ethconfig.HistoryV3AggregationStep)),
+		"inBlk", atomic.LoadUint64(&inputBlockNum),
 		//"blk/s", fmt.Sprintf("%.1f", speedBlock),
 		"tx/s", fmt.Sprintf("%.1f", speedTx),
 		"resultCh", fmt.Sprintf("%d/%d", len(resultCh), cap(resultCh)),
@@ -176,15 +180,19 @@ func Exec3(ctx context.Context,
 	commitThreshold := batchSize.Bytes()
 	resultsThreshold := int64(batchSize.Bytes())
 	progress := NewProgress(block, commitThreshold)
-	logEvery := time.NewTicker(10 * time.Second)
+	logEvery := time.NewTicker(20 * time.Second)
 	defer logEvery.Stop()
-	pruneEvery := time.NewTicker(time.Second)
+	pruneEvery := time.NewTicker(2 * time.Second)
 	defer pruneEvery.Stop()
 	rwsReceiveCond := sync.NewCond(&rwsLock)
 	heap.Init(&rws)
 	agg.SetTxNum(inputTxNum)
 
 	if parallel {
+		//chainDb.Update(ctx, func(tx kv.RwTx) error {
+		//	agg.SetTx(tx)
+		//	return agg.Prune(ctx, ethconfig.HistoryV3AggregationStep)
+		//})
 		applyWg := sync.WaitGroup{} // to wait for finishing of applyLoop after applyCtx cancel
 		applyLoop := func(ctx context.Context) {
 			defer applyWg.Done()
@@ -235,15 +243,39 @@ func Exec3(ctx context.Context,
 					rwsLen := rws.Len()
 					rwsLock.RUnlock()
 
-					progress.Log(execStage.LogPrefix(), rs, rwsLen, uint64(queueSize), rs.DoneCount(), inputBlockNum.Load(), outputBlockNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh, idxStepsInDB(tx))
+					stepsInDB := idxStepsInDB(tx)
+					progress.Log(execStage.LogPrefix(), rs, rwsLen, uint64(queueSize), rs.DoneCount(), inputBlockNum.Load(), outputBlockNum.Load(), outputTxNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh, stepsInDB)
 					if rs.SizeEstimate() < commitThreshold {
+						// too much steps in db will slow-down everything: flush and prune
+						// it means better spend time for pruning, before flushing more data to db
+						// also better do it now - instead of before Commit() - because Commit does block execution
+						if stepsInDB > 5 && rs.SizeEstimate() < uint64(float64(commitThreshold)*0.2) {
+							if err = agg.Prune(ctx, ethconfig.HistoryV3AggregationStep*2); err != nil { // prune part of retired data, before commit
+								panic(err)
+							}
+						} else if stepsInDB > 2 {
+							t := time.Now()
+							if err = agg.Prune(ctx, ethconfig.HistoryV3AggregationStep/10); err != nil { // prune part of retired data, before commit
+								panic(err)
+							}
+
+							if time.Since(t) > 10*time.Second && // allready spent much time on this cycle, let's print for user regular logs
+								rs.SizeEstimate() < uint64(float64(commitThreshold)*0.8) { // batch is 80%-full - means commit soon, time to flush indices
+								break
+							}
+						}
+
+						// rotate indices-WAL, execution will work on new WAL while rwTx-thread can flush indices-WAL to db or prune db.
 						if err := agg.Flush(tx); err != nil {
 							panic(err)
 						}
 						break
 					}
+
 					cancelApplyCtx()
 					applyWg.Wait()
+
+					var t1, t2 time.Duration
 					commitStart := time.Now()
 					log.Info("Committing...")
 					err := func() error {
@@ -286,10 +318,14 @@ func Exec3(ctx context.Context,
 							resultsSize.Add(-txTask.ResultsSize)
 							rs.AddWork(txTask)
 						}
+						t1 = time.Since(commitStart)
+						tt := time.Now()
 						if err := rs.Flush(tx); err != nil {
 							return err
 						}
+						t2 = time.Since(tt)
 						tx.CollectMetrics()
+
 						if err := agg.Flush(tx); err != nil {
 							return err
 						}
@@ -297,11 +333,6 @@ func Exec3(ctx context.Context,
 							return err
 						}
 						//TODO: can't commit - because we are in the middle of the block. Need make sure that we are always processed whole block.
-						if idxStepsInDB(tx) > 3 {
-							if err = agg.Prune(ctx, ethconfig.HistoryV3AggregationStep/10); err != nil { // prune part of retired data, before commit
-								return err
-							}
-						}
 						if err = tx.Commit(); err != nil {
 							return err
 						}
@@ -323,13 +354,11 @@ func Exec3(ctx context.Context,
 					if err != nil {
 						panic(err)
 					}
-					log.Info("Committed", "time", time.Since(commitStart))
+					log.Info("Committed", "time", time.Since(commitStart), "drain", t1, "rs.flush", t2)
 				case <-pruneEvery.C:
-					log.Debug("can prune", "can", agg.CanPrune(tx))
 					if agg.CanPrune(tx) {
 						t := time.Now()
 						for time.Since(t) < 2*time.Second {
-							log.Debug("do prune")
 							if err = agg.Prune(ctx, 1_000); err != nil { // prune part of retired data, before commit
 								panic(err)
 							}
@@ -383,6 +412,12 @@ loop:
 		skipAnalysis := core.SkipAnalysis(chainConfig, blockNum)
 		if parallel {
 			func() {
+				rwsLock.RLock()
+				needWait := rws.Len() > queueSize || resultsSize.Load() >= resultsThreshold || rs.SizeEstimate() >= commitThreshold
+				rwsLock.RUnlock()
+				if !needWait {
+					return
+				}
 				rwsLock.Lock()
 				defer rwsLock.Unlock()
 				for rws.Len() > queueSize || resultsSize.Load() >= resultsThreshold || rs.SizeEstimate() >= commitThreshold {
@@ -444,13 +479,17 @@ loop:
 			}
 			inputTxNum++
 		}
-		b, header = nil, nil
 		core.BlockExecutionTimer.UpdateDuration(t)
-		syncMetrics[stages.Execution].Set(blockNum)
+		if !parallel {
+			syncMetrics[stages.Execution].Set(blockNum)
+		}
 
 		if rs.SizeEstimate() >= commitThreshold {
 			commitStart := time.Now()
 			log.Info("Committing...")
+			if err = agg.Prune(ctx, 10*ethconfig.HistoryV3AggregationStep); err != nil {
+				return err
+			}
 			if err := rs.Flush(applyTx); err != nil {
 				return err
 			}
@@ -460,11 +499,8 @@ loop:
 			if err = execStage.Update(applyTx, stageProgress); err != nil {
 				return err
 			}
+			applyTx.CollectMetrics()
 			if !useExternalTx {
-				applyTx.CollectMetrics()
-				if err = agg.Prune(ctx, ethconfig.HistoryV3AggregationStep/10); err != nil {
-					return err
-				}
 				if err := applyTx.Commit(); err != nil {
 					return err
 				}
@@ -478,12 +514,17 @@ loop:
 			}
 		}
 
+		if !parallel {
+			select {
+			case <-logEvery.C:
+				stepsInDB := idxStepsInDB(applyTx)
+				progress.Log(execStage.LogPrefix(), rs, rws.Len(), uint64(queueSize), count, inputBlockNum.Load(), outputBlockNum.Load(), outputTxNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh, stepsInDB)
+			default:
+			}
+		}
+
 		// Check for interrupts
 		select {
-		case <-logEvery.C:
-			if !parallel {
-				progress.Log(execStage.LogPrefix(), rs, rws.Len(), uint64(queueSize), count, inputBlockNum.Load(), outputBlockNum.Load(), repeatCount.Load(), uint64(resultsSize.Load()), resultCh, idxStepsInDB(applyTx))
-			}
 		case <-interruptCh:
 			log.Info(fmt.Sprintf("interrupted, please wait for cleanup, next run will start with block %d", blockNum))
 			maxTxNum.Store(inputTxNum)
@@ -547,6 +588,7 @@ func processResultQueue(rws *state.TxTaskQueue, outputTxNum *atomic2.Uint64, rs 
 			triggerCount.Add(rs.CommitTxNum(txTask.Sender, txTask.TxNum))
 			outputTxNum.Inc()
 			outputBlockNum.Store(txTask.BlockNum)
+			syncMetrics[stages.Execution].Set(txTask.BlockNum)
 			//fmt.Printf("Applied %d block %d txIndex %d\n", txTask.TxNum, txTask.BlockNum, txTask.TxIndex)
 		} else {
 			rs.AddWork(txTask)
@@ -919,7 +961,6 @@ func ReconstituteState(ctx context.Context, s *StageState, dirs datadir.Dirs, wo
 		}
 
 		core.BlockExecutionTimer.UpdateDuration(t)
-		syncMetrics[stages.Execution].Set(bn)
 	}
 	close(workCh)
 	wg.Wait()

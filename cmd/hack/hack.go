@@ -1337,6 +1337,21 @@ func checkIndex(filename string) error {
 		}
 		pos = nextPos
 	}
+
+func readSeg(chaindata string) error {
+	vDecomp, err := compress.NewDecompressor(chaindata)
+	if err != nil {
+		return err
+	}
+	defer vDecomp.Close()
+	g := vDecomp.MakeGetter()
+	var buf []byte
+	var count int
+	for g.HasNext() {
+		g.Next(buf[:0])
+		count++
+	}
+	fmt.Printf("count=%d\n", count)
 	return nil
 }
 
@@ -1359,7 +1374,7 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 	go func() {
-		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+		if err := http.ListenAndServe("localhost:6960", nil); err != nil {
 			log.Error("Failure in running pprof server", "err", err)
 		}
 	}()
@@ -1469,6 +1484,8 @@ func main() {
 		err = checkIndex(*chaindata)
 	case "rmSnKey":
 		err = rmSnKey(*chaindata)
+	case "readSeg":
+		err = readSeg(*chaindata)
 	}
 
 	if err != nil {

@@ -50,6 +50,7 @@ import (
 	"github.com/ledgerwatch/erigon/cmd/downloader/downloader"
 	"github.com/ledgerwatch/erigon/cmd/downloader/downloader/downloadercfg"
 	"github.com/ledgerwatch/erigon/cmd/downloader/downloadergrpc"
+	clcore "github.com/ledgerwatch/erigon/cmd/erigon-cl/cl-core"
 	"github.com/ledgerwatch/erigon/cmd/lightclient/lightclient"
 	"github.com/ledgerwatch/erigon/cmd/rpcdaemon/cli"
 	"github.com/ledgerwatch/erigon/cmd/rpcdaemon/commands"
@@ -474,7 +475,7 @@ func New(stack *node.Node, config *ethconfig.Config, logger log.Logger) (*Ethere
 			if err != nil {
 				return nil, err
 			}
-			bs, err := lightclient.RetrieveBeaconState(ctx,
+			bs, err := clcore.RetrieveBeaconState(ctx,
 				clparams.GetCheckpointSyncEndpoint(clparams.NetworkType(config.NetworkID)))
 
 			if err != nil {
@@ -868,6 +869,9 @@ func (s *Ethereum) setUpBlockReader(ctx context.Context, dirs datadir.Dirs, snCo
 
 	allSnapshots := snapshotsync.NewRoSnapshots(snConfig, dirs.Snap)
 	var err error
+	if !snConfig.NoDownloader {
+		allSnapshots.OptimisticalyReopenWithDB(s.chainDB)
+	}
 	blockReader := snapshotsync.NewBlockReaderWithSnapshots(allSnapshots)
 
 	if !snConfig.NoDownloader {

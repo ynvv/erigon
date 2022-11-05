@@ -3,8 +3,8 @@ module github.com/ledgerwatch/erigon
 go 1.18
 
 require (
-	github.com/ledgerwatch/erigon-lib v0.0.0-20221029141037-ef687cf99e46
-	github.com/ledgerwatch/erigon-snapshot v1.1.1-0.20221025023844-6e716b9e651c
+	github.com/ledgerwatch/erigon-lib v0.0.0-20221103151411-ad300d8d660f
+	github.com/ledgerwatch/erigon-snapshot v1.1.1-0.20221026024915-f6abfe5c120e
 	github.com/ledgerwatch/log/v3 v3.6.0
 	github.com/ledgerwatch/secp256k1 v1.0.0
 	github.com/ledgerwatch/trackerslist v1.0.0
@@ -84,11 +84,12 @@ require (
 	google.golang.org/protobuf v1.28.1
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	gopkg.in/yaml.v2 v2.4.0
-	modernc.org/sqlite v1.19.2
+	modernc.org/sqlite v1.19.3
 	pgregory.net/rapid v0.5.3
 )
 
 require (
+	github.com/Giulio2002/bls v0.0.0-20221103221031-e1945063d0cf // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/containerd/cgroups v1.0.4 // indirect
@@ -112,6 +113,7 @@ require (
 	github.com/klauspost/compress v1.15.10 // indirect
 	github.com/klauspost/cpuid/v2 v2.1.1 // indirect
 	github.com/koron/go-ssdp v0.0.3 // indirect
+	github.com/ledgerwatch/interfaces v0.0.0-20221103124126-5c404021ea28 // indirect
 	github.com/libp2p/go-buffer-pool v0.1.0 // indirect
 	github.com/libp2p/go-cidranger v1.1.0 // indirect
 	github.com/libp2p/go-flow-metrics v0.1.0 // indirect
@@ -127,6 +129,7 @@ require (
 	github.com/marten-seemann/qtls-go1-18 v0.1.2 // indirect
 	github.com/marten-seemann/qtls-go1-19 v0.1.0 // indirect
 	github.com/marten-seemann/tcp v0.0.0-20210406111302-dfbc87cc63fd // indirect
+	github.com/matryer/moq v0.2.7 // indirect
 	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/miekg/dns v1.1.50 // indirect
@@ -244,8 +247,8 @@ require (
 	gotest.tools/v3 v3.3.0 // indirect
 	lukechampine.com/uint128 v1.2.0 // indirect
 	modernc.org/cc/v3 v3.40.0 // indirect
-	modernc.org/ccgo/v3 v3.16.12 // indirect
-	modernc.org/libc v1.20.3 // indirect
+	modernc.org/ccgo/v3 v3.16.13-0.20221017192402-261537637ce8 // indirect
+	modernc.org/libc v1.21.2 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.4.0 // indirect
 	modernc.org/opt v0.1.3 // indirect
