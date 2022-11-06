@@ -17,7 +17,11 @@ func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, h
 				if badBlockUnwind {
 					return ForwardAborted, nil
 				}
-				return SpawnStageSnapshots(s, ctx, tx, snapshots, firstCycle)
+				if err := SpawnStageSnapshots(s, ctx, tx, snapshots, firstCycle); err != nil {
+					return ForwardAborted, err
+				} else {
+					return ForwardCompleted, nil
+				}
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error {
 				return nil

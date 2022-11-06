@@ -28,8 +28,12 @@ func MiningStages(
 		{
 			ID:          stages.MiningCreateBlock,
 			Description: "Mining: construct new block from tx pool",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnMiningCreateBlockStage(s, tx, createBlockCfg, ctx.Done())
+			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, commitAfterEachStage bool, quiet bool) (ForwardResult, error) {
+				if err := SpawnMiningCreateBlockStage(s, tx, createBlockCfg, ctx.Done()); err != nil {
+					return ForwardAborted, err
+				} else {
+					return ForwardCompleted, nil
+				}
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error { return nil },
 			Prune:  func(firstCycle bool, u *PruneState, tx kv.RwTx) error { return nil },
@@ -37,8 +41,12 @@ func MiningStages(
 		{
 			ID:          stages.MiningExecution,
 			Description: "Mining: construct new block from tx pool",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnMiningExecStage(s, tx, execCfg, ctx.Done())
+			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, commitAfterEachStage bool, quiet bool) (ForwardResult, error) {
+				if err := SpawnMiningExecStage(s, tx, execCfg, ctx.Done()); err != nil {
+					return ForwardAborted, err
+				} else {
+					return ForwardCompleted, nil
+				}
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error { return nil },
 			Prune:  func(firstCycle bool, u *PruneState, tx kv.RwTx) error { return nil },
@@ -46,8 +54,12 @@ func MiningStages(
 		{
 			ID:          stages.HashState,
 			Description: "Hash the key in the state",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnHashStateStage(s, tx, hashStateCfg, ctx, quiet)
+			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, commitAfterEachStage bool, quiet bool) (ForwardResult, error) {
+				if err := SpawnHashStateStage(s, tx, hashStateCfg, ctx, quiet); err != nil {
+					return ForwardAborted, err
+				} else {
+					return ForwardCompleted, nil
+				}
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error { return nil },
 			Prune:  func(firstCycle bool, u *PruneState, tx kv.RwTx) error { return nil },
@@ -55,13 +67,13 @@ func MiningStages(
 		{
 			ID:          stages.IntermediateHashes,
 			Description: "Generate intermediate hashes and computing state root",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
+			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, commitAfterEachStage bool, quiet bool) (ForwardResult, error) {
 				stateRoot, err := SpawnIntermediateHashesStage(s, u, tx, trieCfg, ctx, quiet)
 				if err != nil {
-					return err
+					return ForwardAborted, err
 				}
 				createBlockCfg.miner.MiningBlock.Header.Root = stateRoot
-				return nil
+				return ForwardCompleted, nil
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error { return nil },
 			Prune:  func(firstCycle bool, u *PruneState, tx kv.RwTx) error { return nil },
@@ -69,8 +81,12 @@ func MiningStages(
 		{
 			ID:          stages.MiningFinish,
 			Description: "Mining: create and propagate valid block",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnMiningFinishStage(s, tx, finish, ctx.Done())
+			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, commitAfterEachStage bool, quiet bool) (ForwardResult, error) {
+				if err := SpawnMiningFinishStage(s, tx, finish, ctx.Done()); err != nil {
+					return ForwardAborted, err
+				} else {
+					return ForwardCompleted, nil
+				}
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error { return nil },
 			Prune:  func(firstCycle bool, u *PruneState, tx kv.RwTx) error { return nil },

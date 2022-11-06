@@ -140,12 +140,8 @@ func StageLoopStep(
 		}
 	}() // avoid crash because Erigon's core does many things
 
-	var origin, finishProgressBefore uint64
+	var finishProgressBefore uint64
 	if err := db.View(ctx, func(tx kv.Tx) error {
-		origin, err = stages.GetStageProgress(tx, stages.Headers)
-		if err != nil {
-			return err
-		}
 		finishProgressBefore, err = stages.GetStageProgress(tx, stages.Finish)
 		if err != nil {
 			return err
@@ -263,10 +259,9 @@ func MiningStep(ctx context.Context, kv kv.RwDB, mining *stagedsync.Sync, tmpDir
 	miningBatch := memdb.NewMemoryBatch(tx, tmpDir)
 	defer miningBatch.Rollback()
 
-	if err = mining.Run(nil, miningBatch, false /* firstCycle */, false /* quiet */); err != nil {
+	if _, err = mining.Run(nil, miningBatch, miningBatch, false /* firstCycle */, false /* quiet */); err != nil {
 		return err
 	}
-	tx.Rollback()
 	return nil
 }
 

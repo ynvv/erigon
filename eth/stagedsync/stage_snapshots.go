@@ -77,36 +77,23 @@ func SpawnStageSnapshots(
 	tx kv.RwTx,
 	cfg SnapshotsCfg,
 	initialCycle bool,
-) (result ForwardResult, err error) {
-	useExternalTx := tx != nil
-	if !useExternalTx {
-		tx, err = cfg.db.BeginRw(ctx)
-		if err != nil {
-			return ForwardAborted, err
-		}
-		defer tx.Rollback()
-	}
+) error {
 	if err := DownloadAndIndexSnapshotsIfNeed(s, ctx, tx, cfg, initialCycle); err != nil {
-		return ForwardAborted, err
+		return err
 	}
 	var minProgress uint64
 	for _, stage := range []stages.SyncStage{stages.Headers, stages.Bodies, stages.Senders, stages.TxLookup} {
 		progress, err := stages.GetStageProgress(tx, stage)
 		if err != nil {
-			return ForwardAborted, err
+			return err
 		}
 		if minProgress == 0 || progress < minProgress {
 			minProgress = progress
 		}
 	}
 	if minProgress > s.BlockNumber {
-		if err = s.Update(tx, minProgress); err != nil {
-			return ForwardAborted, err
-		}
-	}
-	if !useExternalTx {
-		if err := tx.Commit(); err != nil {
-			return ForwardAborted, err
+		if err := s.Update(tx, minProgress); err != nil {
+			return err
 		}
 	}
 

@@ -101,17 +101,6 @@ func Exec3(ctx context.Context,
 	genesis *core.Genesis,
 ) (ForwardResult, error) {
 	parallel := workerCount > 1
-	useExternalTx := applyTx != nil
-	if !useExternalTx && !parallel {
-		applyTx, err = chainDb.BeginRw(ctx)
-		if err != nil {
-			return err
-		}
-		defer applyTx.Rollback()
-	}
-	if !useExternalTx && blockReader.(WithSnapshots).Snapshots().Cfg().Enabled {
-		defer blockReader.(WithSnapshots).Snapshots().EnableMadvNormal().DisableReadAhead()
-	}
 
 	var block, stageProgress uint64
 	var outputTxNum, maxTxNum = atomic2.NewUint64(0), atomic2.NewUint64(0)
@@ -143,13 +132,13 @@ func Exec3(ctx context.Context,
 		agg.SetTx(applyTx)
 		_maxTxNum, err := rawdb.TxNums.Max(applyTx, maxBlockNum)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 		maxTxNum.Store(_maxTxNum)
 		if block > 0 {
 			_outputTxNum, err := rawdb.TxNums.Max(applyTx, execStage.BlockNumber)
 			if err != nil {
-				return err
+				return ForwardAborted, err
 			}
 			outputTxNum.Store(_outputTxNum)
 			outputTxNum.Inc()
@@ -173,7 +162,7 @@ func Exec3(ctx context.Context,
 			}
 			return nil
 		}); err != nil {
-			return err
+			return ForwardAborted, err
 		}
 	}
 
@@ -402,15 +391,17 @@ func Exec3(ctx context.Context,
 
 	var b *types.Block
 	var blockNum uint64
+	var result ForwardResult = ForwardCompleted
 loop:
 	for blockNum = block; blockNum <= maxBlockNum; blockNum++ {
 		t := time.Now()
 
 		inputBlockNum.Store(blockNum)
 		rules := chainConfig.Rules(blockNum)
+		var err error
 		b, err = blockWithSenders(chainDb, applyTx, blockReader, blockNum)
 		if err != nil {
-			return err
+			return ForwardAborted, err
 		}
 		txs := b.Transactions()
 		header := b.HeaderNoCopy()
@@ -450,7 +441,7 @@ loop:
 				txTask.Tx = txs[txIndex]
 				txTask.TxAsMessage, err = txTask.Tx.AsMessage(*types.MakeSigner(chainConfig, txTask.BlockNum), header.BaseFee, txTask.Rules)
 				if err != nil {
-					panic(err)
+					return ForwardAborted, err
 				}
 
 				if sender, ok := txs[txIndex].GetSender(); ok {
@@ -478,7 +469,7 @@ loop:
 					outputBlockNum.Store(txTask.BlockNum)
 					//fmt.Printf("Applied %d block %d txIndex %d\n", txTask.TxNum, txTask.BlockNum, txTask.TxIndex)
 				} else {
-					return fmt.Errorf("rolled back %d block %d txIndex %d, err = %v", txTask.TxNum, txTask.BlockNum, txTask.TxIndex, txTask.Error)
+					return ForwardAborted, fmt.Errorf("rolled back %d block %d txIndex %d, err = %v", txTask.TxNum, txTask.BlockNum, txTask.TxIndex, txTask.Error)
 				}
 
 				stageProgress = blockNum
@@ -488,36 +479,31 @@ loop:
 		core.BlockExecutionTimer.UpdateDuration(t)
 		if !parallel {
 			syncMetrics[stages.Execution].Set(blockNum)
+			if err := agg.BuildFilesInBackground(chainDb); err != nil {
+				return ForwardAborted, err
+			}
 
 			if rs.SizeEstimate() >= commitThreshold {
-				commitStart := time.Now()
-				log.Info("Committing...")
 				if err = agg.Prune(ctx, 10*ethconfig.HistoryV3AggregationStep); err != nil {
-					return err
+					return ForwardAborted, err
 				}
 				if err := rs.Flush(applyTx); err != nil {
-					return err
+					return ForwardAborted, err
 				}
 				if err := agg.Flush(applyTx); err != nil {
-					return err
+					return ForwardAborted, err
 				}
 				if err = execStage.Update(applyTx, stageProgress); err != nil {
-					return err
+					return ForwardAborted, err
 				}
 				applyTx.CollectMetrics()
-				if !useExternalTx {
-					if err := applyTx.Commit(); err != nil {
-						return err
-					}
-					if applyTx, err = chainDb.BeginRw(ctx); err != nil {
-						return err
-					}
-					defer applyTx.Rollback()
-					agg.SetTx(applyTx)
-					reconWorkers[0].ResetTx(applyTx)
-					log.Info("Committed", "time", time.Since(commitStart), "toProgress", stageProgress)
-				}
+				result = ForwardPartial
+				maxTxNum.Store(inputTxNum)
+				break loop
 			}
+		}
+
+		if !parallel {
 			select {
 			case <-logEvery.C:
 				stepsInDB := idxStepsInDB(applyTx)
@@ -535,30 +521,22 @@ loop:
 		default:
 		}
 
-		if err := agg.BuildFilesInBackground(chainDb); err != nil {
-			return err
-		}
 	}
 	if parallel {
 		wg.Wait()
-	} else {
-		if err = rs.Flush(applyTx); err != nil {
-			return err
+	} else if result == ForwardCompleted {
+		if err := rs.Flush(applyTx); err != nil {
+			return ForwardAborted, err
 		}
-		if err = agg.Flush(applyTx); err != nil {
-			return err
+		if err := agg.Flush(applyTx); err != nil {
+			return ForwardAborted, err
 		}
-		if err = execStage.Update(applyTx, stageProgress); err != nil {
-			return err
+		if err := execStage.Update(applyTx, stageProgress); err != nil {
+			return ForwardAborted, err
 		}
 	}
 
-	if !useExternalTx && applyTx != nil {
-		if err = applyTx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return result, nil
 }
 func blockWithSenders(db kv.RoDB, tx kv.Tx, blockReader services.BlockReader, blockNum uint64) (b *types.Block, err error) {
 	if tx == nil {

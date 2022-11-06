@@ -176,7 +176,7 @@ func (s *Sync) StageState(stage stages.SyncStage, tx kv.Tx) (*StageState, error)
 	return &StageState{s, stage, blockNum}, nil
 }
 
-func (s *Sync) RunUnwind(db kv.RwDB, tx kv.RwTx) error {
+func (s *Sync) RunUnwind(tx kv.RwTx) error {
 	if s.unwindPoint == nil {
 		return nil
 	}
@@ -184,7 +184,7 @@ func (s *Sync) RunUnwind(db kv.RwDB, tx kv.RwTx) error {
 		if s.unwindOrder[j] == nil || s.unwindOrder[j].Disabled || s.unwindOrder[j].Unwind == nil {
 			continue
 		}
-		if err := s.unwindStage(false, s.unwindOrder[j], db, tx); err != nil {
+		if err := s.unwindStage(false, s.unwindOrder[j], tx); err != nil {
 			return err
 		}
 	}
@@ -213,7 +213,7 @@ func (s *Sync) Run(ctx context.Context, db kv.RwDB, tx kv.RwTx, firstCycle bool,
 				if s.unwindOrder[j] == nil || s.unwindOrder[j].Disabled || s.unwindOrder[j].Unwind == nil {
 					continue
 				}
-				if err = s.unwindStage(firstCycle, s.unwindOrder[j], db, tx); err != nil {
+				if err = s.unwindStage(firstCycle, s.unwindOrder[j], tx); err != nil {
 					return committed, err
 				}
 			}
