@@ -40,25 +40,10 @@ func (s *Sync) NewUnwindState(id stages.SyncStage, unwindPoint, currentProgress 
 	return &UnwindState{id, unwindPoint, currentProgress, common.Hash{}, s}
 }
 
-func (s *Sync) PruneStageState(id stages.SyncStage, forwardProgress uint64, tx kv.Tx, db kv.RwDB) (*PruneState, error) {
-	var pruneProgress uint64
-	var err error
-	useExternalTx := tx != nil
-	if useExternalTx {
-		pruneProgress, err = stages.GetStagePruneProgress(tx, id)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		if err = db.View(context.Background(), func(tx kv.Tx) error {
-			pruneProgress, err = stages.GetStagePruneProgress(tx, id)
-			if err != nil {
-				return err
-			}
-			return nil
-		}); err != nil {
-			return nil, err
-		}
+func (s *Sync) PruneStageState(id stages.SyncStage, forwardProgress uint64, tx kv.Tx) (*PruneState, error) {
+	pruneProgress, err := stages.GetStagePruneProgress(tx, id)
+	if err != nil {
+		return nil, err
 	}
 
 	return &PruneState{id, forwardProgress, pruneProgress, s}, nil
@@ -289,7 +274,7 @@ func (s *Sync) Run(ctx context.Context, db kv.RwDB, tx kv.RwTx, firstCycle bool,
 		if s.pruningOrder[i] == nil || s.pruningOrder[i].Disabled || s.pruningOrder[i].Prune == nil {
 			continue
 		}
-		if err := s.pruneStage(firstCycle, s.pruningOrder[i], db, tx); err != nil {
+		if err := s.pruneStage(firstCycle, s.pruningOrder[i], tx); err != nil {
 			return committed, err
 		}
 	}
@@ -413,7 +398,7 @@ func (s *Sync) unwindStage(firstCycle bool, stage *Stage, tx kv.RwTx) error {
 	return nil
 }
 
-func (s *Sync) pruneStage(firstCycle bool, stage *Stage, db kv.RwDB, tx kv.RwTx) error {
+func (s *Sync) pruneStage(firstCycle bool, stage *Stage, tx kv.RwTx) error {
 	start := time.Now()
 	log.Trace("Prune...", "stage", stage.ID)
 
@@ -422,7 +407,7 @@ func (s *Sync) pruneStage(firstCycle bool, stage *Stage, db kv.RwDB, tx kv.RwTx)
 		return err
 	}
 
-	prune, err := s.PruneStageState(stage.ID, stageState.BlockNumber, tx, db)
+	prune, err := s.PruneStageState(stage.ID, stageState.BlockNumber, tx)
 	if err != nil {
 		return err
 	}

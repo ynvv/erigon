@@ -663,7 +663,7 @@ func stageSenders(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.Senders, s.BlockNumber, tx, db)
+		p, err := sync.PruneStageState(stages.Senders, s.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -726,19 +726,26 @@ func stageExec(db kv.RwDB, ctx context.Context) error {
 	}
 
 	if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.Execution, s.BlockNumber, nil, db)
-		if err != nil {
-			return err
-		}
-		err = stagedsync.PruneExecutionStage(p, nil, cfg, ctx, true)
-		if err != nil {
+		if err := db.Update(ctx, func(tx kv.RwTx) error {
+			p, err := sync.PruneStageState(stages.Execution, s.BlockNumber, tx)
+			if err != nil {
+				return err
+			}
+			err = stagedsync.PruneExecutionStage(p, tx, cfg, ctx, true)
+			if err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	err := stagedsync.SpawnExecuteBlocksStage(s, sync, nil, block, ctx, cfg, true /* initialCycle */, false /* quiet */)
-	if err != nil {
+	if err := db.Update(ctx, func(tx kv.RwTx) error {
+		_, err := stagedsync.SpawnExecuteBlocksStage(s, sync, nil, block, ctx, cfg, true /* initialCycle */, false /* quiet */)
+		return err
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -781,7 +788,7 @@ func stageTrie(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.IntermediateHashes, s.BlockNumber, tx, db)
+		p, err := sync.PruneStageState(stages.IntermediateHashes, s.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -836,7 +843,7 @@ func stageHashState(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.HashState, s.BlockNumber, tx, nil)
+		p, err := sync.PruneStageState(stages.HashState, s.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -894,7 +901,7 @@ func stageLogIndex(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.LogIndex, s.BlockNumber, nil, db)
+		p, err := sync.PruneStageState(stages.LogIndex, s.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -957,7 +964,7 @@ func stageCallTraces(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.CallTraces, s.BlockNumber, tx, nil)
+		p, err := sync.PruneStageState(stages.CallTraces, s.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -1018,7 +1025,7 @@ func stageHistory(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		pa, err := sync.PruneStageState(stages.AccountHistoryIndex, stageAcc.BlockNumber, tx, db)
+		pa, err := sync.PruneStageState(stages.AccountHistoryIndex, stageAcc.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -1026,7 +1033,7 @@ func stageHistory(db kv.RwDB, ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		ps, err := sync.PruneStageState(stages.StorageHistoryIndex, stageStorage.BlockNumber, tx, db)
+		ps, err := sync.PruneStageState(stages.StorageHistoryIndex, stageStorage.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -1089,7 +1096,7 @@ func stageTxLookup(db kv.RwDB, ctx context.Context) error {
 			return err
 		}
 	} else if pruneTo > 0 {
-		p, err := sync.PruneStageState(stages.TxLookup, s.BlockNumber, tx, nil)
+		p, err := sync.PruneStageState(stages.TxLookup, s.BlockNumber, tx)
 		if err != nil {
 			return err
 		}
@@ -1282,7 +1289,7 @@ func progress(tx kv.Getter, stage stages.SyncStage) uint64 {
 }
 
 func stage(st *stagedsync.Sync, tx kv.Tx, db kv.RoDB, stage stages.SyncStage) *stagedsync.StageState {
-	res, err := st.StageState(stage, tx, db)
+	res, err := st.StageState(stage, tx)
 	if err != nil {
 		panic(err)
 	}

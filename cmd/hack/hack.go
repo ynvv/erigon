@@ -1337,6 +1337,8 @@ func checkIndex(filename string) error {
 		}
 		pos = nextPos
 	}
+	return nil
+}
 
 func readSeg(chaindata string) error {
 	vDecomp, err := compress.NewDecompressor(chaindata)
