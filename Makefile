@@ -102,6 +102,7 @@ erigon: go-version erigon.cmd
 
 COMMANDS += devnet
 COMMANDS += downloader
+COMMANDS += erigon-cl
 COMMANDS += hack
 COMMANDS += integration
 COMMANDS += observer
@@ -114,7 +115,7 @@ COMMANDS += txpool
 COMMANDS += verkle
 COMMANDS += evm
 COMMANDS += lightclient
-COMMANDS += sentinel_node
+COMMANDS += sentinel
 
 # build each command using %.cmd rule
 $(COMMANDS): %: %.cmd

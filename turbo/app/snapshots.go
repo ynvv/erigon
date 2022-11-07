@@ -235,7 +235,6 @@ func doIndicesCommand(cliCtx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	agg.SetWorkers(estimate.CompressSnapshot.Workers())
 	err = agg.BuildMissedIndices(ctx, sem)
 	if err != nil {
 		return err
@@ -392,7 +391,7 @@ func doRetireCommand(cliCtx *cli.Context) error {
 	if err = agg.BuildMissedIndices(ctx, sem); err != nil {
 		return err
 	}
-	if err = agg.Merge(ctx); err != nil {
+	if err = agg.MergeLoop(ctx, estimate.CompressSnapshot.Workers()); err != nil {
 		return err
 	}
 
